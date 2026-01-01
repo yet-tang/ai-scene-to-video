@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-scene-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ai_scene_db
+    username: ai_user
+    password: ai_password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+    show-sql: true
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+
+# MinIO Configuration
+minio:
+  url: http://localhost:9000
+  access-key: minio_admin
+  secret-key: minio_password
+  bucket: ai-scene-assets
