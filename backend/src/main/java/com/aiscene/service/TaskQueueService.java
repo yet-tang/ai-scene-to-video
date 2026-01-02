@@ -56,6 +56,19 @@ public class TaskQueueService {
         try {
             String taskId = UUID.randomUUID().toString();
             CeleryMessage message = new CeleryMessage(taskId, taskName, args);
+            
+            // Inject Trace ID from MDC
+            String requestId = MDC.get("request_id");
+            if (requestId != null) {
+                message.headers.put("request_id", requestId);
+            }
+            
+            // Inject User ID from MDC (if present)
+            String userId = MDC.get("user_id");
+            if (userId != null) {
+                message.headers.put("user_id", userId);
+            }
+            
             String jsonMessage = objectMapper.writeValueAsString(message);
             redisTemplate.opsForList().leftPush(QUEUE_NAME, jsonMessage);
         } catch (JsonProcessingException e) {
@@ -71,6 +84,7 @@ public class TaskQueueService {
         public String task;
         public Object[] args;
         public Object kwargs = new Object();
+        public Map<String, Object> headers = new HashMap<>();
         public int retries = 0;
 
         public CeleryMessage(String id, String task, Object[] args) {

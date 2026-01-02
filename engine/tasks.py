@@ -11,7 +11,7 @@ import tempfile
 import os
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+# Logging is configured in worker.py via signals
 logger = logging.getLogger(__name__)
 
 detector = SceneDetector()

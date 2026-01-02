@@ -18,7 +18,9 @@ import java.util.UUID;
 public class RequestLoggingFilter implements Filter {
 
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
-    private static final String MDC_KEY = "request_id";
+    private static final String MDC_KEY_REQ = "request_id";
+    private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String MDC_KEY_USER = "user_id";
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
@@ -36,7 +38,13 @@ public class RequestLoggingFilter implements Filter {
         }
 
         // 2. Put into MDC for logging
-        MDC.put(MDC_KEY, requestId);
+        MDC.put(MDC_KEY_REQ, requestId);
+        
+        // 2.1. Put User ID into MDC if present
+        String userId = httpRequest.getHeader(USER_ID_HEADER);
+        if (userId != null && !userId.isEmpty()) {
+            MDC.put(MDC_KEY_USER, userId);
+        }
 
         // 3. Add to Response Header
         httpResponse.setHeader(REQUEST_ID_HEADER, requestId);
@@ -54,7 +62,8 @@ public class RequestLoggingFilter implements Filter {
                     httpResponse.getStatus(),
                     duration);
             
-            MDC.remove(MDC_KEY);
+            MDC.remove(MDC_KEY_REQ);
+            MDC.remove(MDC_KEY_USER);
         }
     }
 }
