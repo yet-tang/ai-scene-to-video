@@ -6,9 +6,9 @@ spring:
     name: ai-scene-backend
   datasource:
     # Self-hosted Postgres Connection
-    url: jdbc:postgresql://ewo0ccsg04cogsw0ws0wowgw:5432/ai_scene_video_service
-    username: ai_scene_video_user
-    password: RyAf43CRcMMe2tGwvzdFxr1YpwiFg9PC16XdMDC9195jMWwU # Please replace with actual password if not provided in prompt
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -29,7 +29,7 @@ spring:
   # Self-hosted Redis Configuration
   data:
     redis:
-      url: redis://default:li1MpI70nCT2kj4l7pmW6bpW0Zojmksd4MdSaKSbcw0u3R0iHuc3j2Ek8AyU51a5@w40w8wkgwwsw40c08c0cwg84:6379/0
+      url: ${SPRING_REDIS_URL}
 
 # Actuator Configuration
 management:
@@ -46,9 +46,9 @@ management:
 # Supabase Storage (S3 Compatible) Configuration
 supabase:
   storage:
-    region: ap-southeast-2 # Supabase storage is usually us-east-1 or check your dashboard
-    endpoint: https://igcpvuiqkhsqqzsqosyx.storage.supabase.co/storage/v1/s3
-    access-key: c15d48bbf727c43891fef201488b0d96
-    secret-key: ca5f870ecaa59ef73ead0ae0dde3b9849ebc865b37c86145c7aef309963f7a9b
-    bucket: ai-scene-assets
-    public-url: https://igcpvuiqkhsqqzsqosyx.supabase.co/storage/v1/object/public
+    region: ${SUPABASE_STORAGE_REGION:us-east-1}
+    endpoint: ${SUPABASE_STORAGE_ENDPOINT}
+    access-key: ${SUPABASE_STORAGE_ACCESS_KEY}
+    secret-key: ${SUPABASE_STORAGE_SECRET_KEY}
+    bucket: ${SUPABASE_STORAGE_BUCKET}
+    public-url: ${SUPABASE_STORAGE_PUBLIC_URL}
