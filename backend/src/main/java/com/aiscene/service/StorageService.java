@@ -23,11 +23,11 @@ public class StorageService {
     private String bucketName;
 
     @Value("${s3.storage.public-url}")
-    private String publicUrl;publicUrlBase;
+    private String publicUrlBase;
 
     public String uploadFile(MultipartFile file) {
         try {
-            // Note: For Supabase, the bucket must be created in the dashboard beforehand.
+            // Note: The bucket must be created beforehand.
             // We skip bucket creation logic here to keep permissions simple.
 
             String fileName = UUID.randomUUID() + "-" + file.getOriginalFilename();
@@ -43,10 +43,17 @@ public class StorageService {
                     RequestBody.fromInputStream(inputStream, file.getSize()));
 
             // Return the Public URL
-            return publicUrlBase + "/" + bucketName + "/" + fileName;
+            String base = publicUrlBase;
+            if (base.endsWith("/")) {
+                base = base.substring(0, base.length() - 1);
+            }
+            if (!base.startsWith("http://") && !base.startsWith("https://")) {
+                base = "https://" + base;
+            }
+            return base + "/" + bucketName + "/" + fileName;
 
         } catch (Exception e) {
-            log.error("Error uploading file to Supabase Storage", e);
+            log.error("Error uploading file to S3 Storage", e);
             throw new RuntimeException("Failed to upload file", e);
         }
     }
