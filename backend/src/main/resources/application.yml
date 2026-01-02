@@ -47,12 +47,12 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [trace_id=%X{request_id}] [user_id=%X{user_id}] --- [%15.15t] %-40.40c{1.} : %m%n"
 
-# Supabase Storage (S3 Compatible) Configuration
-supabase:
+# S3 Storage (Cloudflare R2 / AWS S3 / MinIO) Configuration
+s3:
   storage:
-    region: ${SUPABASE_STORAGE_REGION:us-east-1}
-    endpoint: ${SUPABASE_STORAGE_ENDPOINT}
-    access-key: ${SUPABASE_STORAGE_ACCESS_KEY}
-    secret-key: ${SUPABASE_STORAGE_SECRET_KEY}
-    bucket: ${SUPABASE_STORAGE_BUCKET}
-    public-url: ${SUPABASE_STORAGE_PUBLIC_URL}
+    region: ${S3_STORAGE_REGION:auto}
+    endpoint: ${S3_STORAGE_ENDPOINT}
+    access-key: ${S3_STORAGE_ACCESS_KEY}
+    secret-key: ${S3_STORAGE_SECRET_KEY}
+    bucket: ${S3_STORAGE_BUCKET}
+    public-url: ${S3_STORAGE_PUBLIC_URL}

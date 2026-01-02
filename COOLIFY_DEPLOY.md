@@ -56,15 +56,15 @@ DB_DSN=postgresql://<DB_USER>:<DB_PASSWORD>@<HOST>:<PORT>/<DB_NAME>
 SPRING_REDIS_URL=redis://default:<PASSWORD>@<HOST>:<PORT>/0
 ```
 
-**对象存储 (Supabase/S3)**
+**对象存储 (S3/Cloudflare R2)**
 ```bash
-SUPABASE_STORAGE_REGION=us-east-1  # 或你的 Region
-SUPABASE_STORAGE_ENDPOINT=https://<PROJECT_ID>.supabase.co/storage/v1/s3
-SUPABASE_STORAGE_ACCESS_KEY=<ACCESS_KEY>
-SUPABASE_STORAGE_SECRET_KEY=<SECRET_KEY>
-SUPABASE_STORAGE_BUCKET=ai-scene-assets
+S3_STORAGE_REGION=auto
+S3_STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+S3_STORAGE_ACCESS_KEY=<ACCESS_KEY>
+S3_STORAGE_SECRET_KEY=<SECRET_KEY>
+S3_STORAGE_BUCKET=ai-scene-assets
 # 公开访问的基础 URL
-SUPABASE_STORAGE_PUBLIC_URL=https://<PROJECT_ID>.supabase.co/storage/v1/object/public
+S3_STORAGE_PUBLIC_URL=https://<PUB_DOMAIN>
 ```
 
 **AI 模型服务**

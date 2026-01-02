@@ -19,11 +19,11 @@ public class StorageService {
 
     private final S3Client s3Client;
 
-    @Value("${supabase.storage.bucket}")
+    @Value("${s3.storage.bucket}")
     private String bucketName;
 
-    @Value("${supabase.storage.public-url}")
-    private String publicUrlBase;
+    @Value("${s3.storage.public-url}")
+    private String publicUrl;publicUrlBase;
 
     public String uploadFile(MultipartFile file) {
         try {

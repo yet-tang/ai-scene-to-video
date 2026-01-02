@@ -9,10 +9,35 @@ import logging
 import psycopg2
 import tempfile
 import os
+import boto3
 
 # Configure logging
 # Logging is configured in worker.py via signals
 logger = logging.getLogger(__name__)
+
+# S3 Client Initialization
+s3_client = boto3.client(
+    's3',
+    endpoint_url=Config.S3_STORAGE_ENDPOINT,
+    aws_access_key_id=Config.S3_STORAGE_ACCESS_KEY,
+    aws_secret_access_key=Config.S3_STORAGE_SECRET_KEY,
+    region_name=Config.S3_STORAGE_REGION
+)
+
+def upload_to_s3(file_path: str, object_name: str) -> str:
+    """Upload a file to S3 bucket and return public URL"""
+    try:
+        s3_client.upload_file(file_path, Config.S3_STORAGE_BUCKET, object_name)
+        # R2 Public Access or Worker URL
+        # Format: public_url/object_name
+        base_url = Config.S3_STORAGE_PUBLIC_URL
+        if base_url.endswith("/"):
+            base_url = base_url[:-1]
+        
+        return f"{base_url}/{object_name}"
+    except Exception as e:
+        logger.error(f"Failed to upload to S3: {str(e)}")
+        raise e
 
 detector = SceneDetector()
 script_gen = ScriptGenerator()
