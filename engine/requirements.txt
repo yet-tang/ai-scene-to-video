@@ -1,0 +1,28 @@
+# Core
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.2
+python-dotenv==1.0.0
+
+# Task Queue
+celery==5.3.6
+redis==5.0.1
+
+# AI & Vision
+dashscope==1.13.0
+opencv-python-headless==4.8.1.78
+Pillow==10.1.0
+numpy==1.26.2
+
+# Video Editing
+moviepy==1.0.3
+decorator==4.4.2 # Compatibility for moviepy
+proglog==0.1.10
+tqdm==4.66.1
+
+# Database (Direct DB access if needed, though API is preferred)
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.23
+
+# Storage
+boto3==1.34.0

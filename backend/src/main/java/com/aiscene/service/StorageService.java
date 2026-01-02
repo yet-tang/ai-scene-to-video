@@ -1,14 +1,13 @@
 package com.aiscene.service;
 
-import io.minio.BucketExistsArgs;
-import io.minio.MakeBucketArgs;
-import io.minio.MinioClient;
-import io.minio.PutObjectArgs;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.InputStream;
 import java.util.UUID;
@@ -18,38 +17,36 @@ import java.util.UUID;
 @Slf4j
 public class StorageService {
 
-    private final MinioClient minioClient;
+    private final S3Client s3Client;
 
-    @Value("${minio.bucket}")
+    @Value("${supabase.storage.bucket}")
     private String bucketName;
 
-    @Value("${minio.url}")
-    private String minioUrl;
+    @Value("${supabase.storage.public-url}")
+    private String publicUrlBase;
 
     public String uploadFile(MultipartFile file) {
         try {
-            boolean found = minioClient.bucketExists(BucketExistsArgs.builder().bucket(bucketName).build());
-            if (!found) {
-                minioClient.makeBucket(MakeBucketArgs.builder().bucket(bucketName).build());
-            }
+            // Note: For Supabase, the bucket must be created in the dashboard beforehand.
+            // We skip bucket creation logic here to keep permissions simple.
 
             String fileName = UUID.randomUUID() + "-" + file.getOriginalFilename();
             InputStream inputStream = file.getInputStream();
 
-            minioClient.putObject(
-                    PutObjectArgs.builder()
-                            .bucket(bucketName)
-                            .object(fileName)
-                            .stream(inputStream, file.getSize(), -1)
-                            .contentType(file.getContentType())
-                            .build());
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(fileName)
+                    .contentType(file.getContentType())
+                    .build();
 
-            // Return the URL. In production, this might be a pre-signed URL or CDN URL.
-            // For MVP local docker, we return the direct minio URL.
-            return minioUrl + "/" + bucketName + "/" + fileName;
+            s3Client.putObject(putObjectRequest, 
+                    RequestBody.fromInputStream(inputStream, file.getSize()));
+
+            // Return the Public URL
+            return publicUrlBase + "/" + bucketName + "/" + fileName;
 
         } catch (Exception e) {
-            log.error("Error uploading file to MinIO", e);
+            log.error("Error uploading file to Supabase Storage", e);
             throw new RuntimeException("Failed to upload file", e);
         }
     }

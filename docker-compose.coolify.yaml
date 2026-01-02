@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  ai-scene-backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ai-scene-backend:latest
+    container_name: ai-scene-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_PORT=8080
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      - SPRING_REDIS_URL=${SPRING_REDIS_URL}
+      # Supabase / S3 Configuration
+      - SUPABASE_STORAGE_REGION=${SUPABASE_STORAGE_REGION}
+      - SUPABASE_STORAGE_ENDPOINT=${SUPABASE_STORAGE_ENDPOINT}
+      - SUPABASE_STORAGE_ACCESS_KEY=${SUPABASE_STORAGE_ACCESS_KEY}
+      - SUPABASE_STORAGE_SECRET_KEY=${SUPABASE_STORAGE_SECRET_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+      - SUPABASE_STORAGE_PUBLIC_URL=${SUPABASE_STORAGE_PUBLIC_URL}
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - coolify
+
+  ai-scene-engine:
+    build: 
+      context: ./engine
+      dockerfile: Dockerfile
+    image: ai-scene-engine:latest
+    container_name: ai-scene-engine
+    environment:
+      # Redis Connection (Same as backend)
+      - REDIS_URL=${SPRING_REDIS_URL}
+      # DB Connection (Engine constructs DSN from parts or uses full DSN if provided)
+      # We recommend passing full DSN for simplicity in Coolify
+      - DB_DSN=${DB_DSN} 
+      # AI Service Keys
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      # S3 Configuration (For uploading final video)
+      - SUPABASE_STORAGE_REGION=${SUPABASE_STORAGE_REGION}
+      - SUPABASE_STORAGE_ENDPOINT=${SUPABASE_STORAGE_ENDPOINT}
+      - SUPABASE_STORAGE_ACCESS_KEY=${SUPABASE_STORAGE_ACCESS_KEY}
+      - SUPABASE_STORAGE_SECRET_KEY=${SUPABASE_STORAGE_SECRET_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+      - SUPABASE_STORAGE_PUBLIC_URL=${SUPABASE_STORAGE_PUBLIC_URL}
+    restart: always
+    depends_on:
+      - ai-scene-backend
+    networks:
+      - coolify
+
+  ai-scene-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ai-scene-frontend:latest
+    container_name: ai-scene-frontend
+    ports:
+      - "3000:80"
+    restart: always
+    depends_on:
+      - ai-scene-backend
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
