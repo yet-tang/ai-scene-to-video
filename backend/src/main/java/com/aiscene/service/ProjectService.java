@@ -50,12 +50,13 @@ public class ProjectService {
         // Construct public URL
         String ossUrl = storageService.getPublicUrl(request.getObjectKey());
 
+        int nextSortOrder = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).size();
         Asset asset = Asset.builder()
                 .project(project)
                 .ossUrl(ossUrl)
                 // Duration will be extracted by Python worker later
                 .duration(0.0)
-                .sortOrder(0)
+                .sortOrder(nextSortOrder)
                 .build();
 
         Asset savedAsset = assetRepository.save(asset);
@@ -68,7 +69,7 @@ public class ProjectService {
 
     public TimelineResponse getSmartTimeline(UUID projectId) {
         Project project = getProject(projectId);
-        List<Asset> assets = assetRepository.findByProjectIdOrderBySortOrderAsc(projectId);
+        List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
 
         // Simple Smart Sort Logic
         // Define priority: Gate > Living > Dining > Kitchen > Bedroom > Toilet > Balcony > Others
@@ -131,7 +132,7 @@ public class ProjectService {
     @Transactional
     public void generateScript(UUID projectId) {
         Project project = getProject(projectId);
-        List<Asset> assets = assetRepository.findByProjectIdOrderBySortOrderAsc(projectId);
+        List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
 
         Object houseInfo = objectMapper.convertValue(project.getHouseInfo(), Object.class);
 
@@ -161,7 +162,7 @@ public class ProjectService {
     @Transactional
     public void renderVideo(UUID projectId) {
         Project project = getProject(projectId);
-        List<Asset> assets = assetRepository.findByProjectIdOrderBySortOrderAsc(projectId);
+        List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
         
         // Prepare data for rendering
         List<Object> timelineAssets = assets.stream().map(asset -> {
@@ -228,7 +229,32 @@ public class ProjectService {
             projectRepository.save(project);
         }
 
-        String ossUrl = storageService.uploadFile(file);
+        // Save file locally for local split optimization
+        String ossUrl;
+        try {
+            // Ensure temp directory exists
+            java.nio.file.Path tempDir = java.nio.file.Paths.get("/tmp/ai-video-uploads");
+            if (!java.nio.file.Files.exists(tempDir)) {
+                java.nio.file.Files.createDirectories(tempDir);
+            }
+            
+            // Save file to local temp
+            String originalFilename = file.getOriginalFilename();
+            String extension = "";
+            if (originalFilename != null && originalFilename.contains(".")) {
+                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
+            }
+            String localFilename = UUID.randomUUID() + extension;
+            java.nio.file.Path localPath = tempDir.resolve(localFilename);
+            file.transferTo(localPath.toFile());
+            
+            // Use file:// protocol for Worker to recognize local path
+            ossUrl = "file://" + localPath.toAbsolutePath().toString();
+            
+        } catch (java.io.IOException e) {
+            // Fallback to S3 upload if local save fails
+            ossUrl = storageService.uploadFile(file);
+        }
 
         Asset asset = Asset.builder()
                 .project(project)

@@ -13,6 +13,7 @@ dashscope==1.13.0
 opencv-python-headless==4.8.1.78
 Pillow==10.1.0
 numpy==1.26.2
+scenedetect==0.6.3
 
 # Video Editing
 moviepy==1.0.3

@@ -14,12 +14,10 @@
         <div class="value">{{ assets.length }}</div>
         <div class="label">片段数</div>
       </div>
-      <div class="divider"></div>
       <div class="stat-item">
         <div class="value">{{ totalDuration }}</div>
         <div class="label">总时长</div>
       </div>
-      <div class="divider"></div>
       <div class="stat-item">
         <div class="value">专业顾问</div>
         <div class="label">解说风格</div>
@@ -43,36 +41,35 @@
       >
         <template #item="{ element, index }">
           <div class="timeline-item">
-            <div class="index-badge">{{ index + 1 }}</div>
-            
             <div class="thumbnail-wrapper">
+              <div class="index-badge">{{ index + 1 }}</div>
               <video :src="element.url" muted class="video-preview"></video>
               <div class="duration-badge">{{ Math.round(element.duration) }}s</div>
             </div>
             
             <div class="item-content">
-              <div class="scene-info" @click="openScenePicker(index)">
-                <div class="scene-label">
-                  {{ element.userLabel || '未知场景' }}
+              <div class="content-top">
+                <div class="scene-info" @click="openScenePicker(index)">
+                  <span class="scene-label">{{ element.userLabel || '未知场景' }}</span>
                   <van-icon name="edit" class="edit-icon" />
                 </div>
-                <div class="ai-confidence" v-if="element.sceneLabel">
-                  AI识别: {{ element.sceneLabel }}
+                <div class="delete-btn" @click.stop="removeAsset(index)">
+                  <van-icon name="delete-o" size="18" color="#c8c9cc" />
                 </div>
               </div>
               
-              <div class="time-range">
-                {{ formatTimeRange(index) }}
+              <div class="content-bottom">
+                <div class="ai-tag" v-if="element.sceneLabel">
+                  AI: {{ element.sceneLabel }}
+                </div>
+                <div class="time-range">
+                  {{ formatTimeRange(index) }}
+                </div>
               </div>
             </div>
 
-            <div class="actions">
-              <div class="drag-handle">
-                <van-icon name="bars" size="20" color="#c8c9cc" />
-              </div>
-              <div class="delete-btn" @click.stop="removeAsset(index)">
-                <van-icon name="delete-o" size="16" color="#969799" />
-              </div>
+            <div class="drag-handle">
+              <van-icon name="bars" size="20" color="#c8c9cc" />
             </div>
           </div>
         </template>
@@ -159,6 +156,7 @@ const scriptContent = ref('')
 const isScriptGenerating = ref(false)
 const isRendering = ref(false)
 let pollTimer: any = null
+const analysisDone = ref(false)
 
 // 场景选择
 const showPicker = ref(false)
@@ -213,6 +211,9 @@ const startPolling = () => {
     // Poll until all assets have scene labels (analysis done)
     await projectStore.fetchTimeline(projectId)
     const newAssets = projectStore.currentProject.assets
+    if (newAssets.length !== assets.value.length) {
+      assets.value = [...newAssets]
+    }
     
     // Only update if we are not dragging? 
     // Updating list while dragging causes issues.
@@ -233,6 +234,15 @@ const startPolling = () => {
     
     if (hasUpdate) {
         showToast('AI 分析已更新')
+    }
+
+    if (!analysisDone.value) {
+      const done = assets.value.length > 0 && assets.value.every(a => !!a.sceneLabel)
+      if (done) {
+        analysisDone.value = true
+        stopPolling()
+        showToast('AI 分析完成')
+      }
     }
     
     // Also check script status if we are waiting for it
@@ -367,10 +377,10 @@ const onGenerateVideo = async () => {
   margin: 12px 16px;
   background: #fff;
   border-radius: 8px;
-  padding: 16px;
+  padding: 16px 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: space-around;
   box-shadow: 0 2px 8px rgba(0,0,0,0.02);
 }
 
@@ -380,7 +390,7 @@ const onGenerateVideo = async () => {
 }
 
 .stat-item .value {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
   color: #323233;
 }
@@ -389,12 +399,6 @@ const onGenerateVideo = async () => {
   font-size: 12px;
   color: #969799;
   margin-top: 4px;
-}
-
-.divider {
-  width: 1px;
-  height: 24px;
-  background: #ebedf0;
 }
 
 .timeline-list {
@@ -425,7 +429,7 @@ const onGenerateVideo = async () => {
   padding: 12px;
   margin-bottom: 12px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   box-shadow: 0 2px 4px rgba(0,0,0,0.02);
   position: relative;
   transition: all 0.2s;
@@ -438,19 +442,19 @@ const onGenerateVideo = async () => {
 
 .index-badge {
   position: absolute;
-  top: -6px;
-  left: -6px;
-  width: 20px;
-  height: 20px;
-  background: #323233;
+  top: 4px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
   color: #fff;
-  border-radius: 50%;
-  font-size: 12px;
+  border-radius: 4px;
+  font-size: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
 .thumbnail-wrapper {
@@ -485,19 +489,32 @@ const onGenerateVideo = async () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.content-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.content-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .scene-info {
-  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
 }
 
 .scene-label {
   font-size: 15px;
   font-weight: 600;
   color: #323233;
-  display: flex;
-  align-items: center;
 }
 
 .edit-icon {
@@ -507,14 +524,13 @@ const onGenerateVideo = async () => {
   opacity: 0.5;
 }
 
-.ai-confidence {
-  font-size: 11px;
+.ai-tag {
+  font-size: 10px;
   color: #1989fa;
-  margin-top: 2px;
   background: #e8f3ff;
+  padding: 2px 6px;
+  border-radius: 4px;
   display: inline-block;
-  padding: 1px 4px;
-  border-radius: 2px;
 }
 
 .time-range {
@@ -523,21 +539,17 @@ const onGenerateVideo = async () => {
   font-family: monospace;
 }
 
-.actions {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 96px;
-  padding-left: 8px;
-}
-
 .drag-handle {
-  padding: 8px 4px;
+  display: flex;
+  align-items: center;
+  padding: 0 4px 0 12px;
   cursor: grab;
 }
 
 .delete-btn {
-  padding: 8px 4px;
+  padding: 4px;
+  margin-top: -4px;
+  margin-right: -4px;
 }
 
 .add-clip-btn {
@@ -575,7 +587,8 @@ const onGenerateVideo = async () => {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 12px 16px 24px;
+  padding: 12px 16px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
   background: #fff;
   box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
   z-index: 100;

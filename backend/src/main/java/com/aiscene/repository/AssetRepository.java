@@ -10,4 +10,5 @@ import java.util.UUID;
 @Repository
 public interface AssetRepository extends JpaRepository<Asset, UUID> {
     List<Asset> findByProjectIdOrderBySortOrderAsc(UUID projectId);
+    List<Asset> findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(UUID projectId);
 }

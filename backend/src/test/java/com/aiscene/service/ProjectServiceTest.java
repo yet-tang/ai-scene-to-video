@@ -88,7 +88,7 @@ class ProjectServiceTest {
         Asset a2 = Asset.builder().id(UUID.randomUUID()).sceneLabel("厨房").sortOrder(0).build();
         Asset a3 = Asset.builder().id(UUID.randomUUID()).sceneLabel("小区门头").sortOrder(0).build();
         List<Asset> assets = new ArrayList<>(List.of(a1, a2, a3));
-        when(assetRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(assets);
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(assets);
 
         TimelineResponse timeline = projectService.getSmartTimeline(projectId);
 
@@ -104,7 +104,7 @@ class ProjectServiceTest {
         Asset a1 = Asset.builder().id(UUID.randomUUID()).sceneLabel(null).build();
         Asset a2 = Asset.builder().id(UUID.randomUUID()).sceneLabel(null).build();
         List<Asset> assets = new ArrayList<>(List.of(a1, a2));
-        when(assetRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(assets);
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(assets);
 
         TimelineResponse timeline = projectService.getSmartTimeline(projectId);
 
@@ -123,7 +123,7 @@ class ProjectServiceTest {
                 .sceneScore(0.9)
                 .ossUrl("u")
                 .build();
-        when(assetRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(List.of(asset));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(asset));
 
         Object houseInfoObj = Map.of("x", 1);
         when(objectMapper.convertValue(eq(project.getHouseInfo()), eq(Object.class))).thenReturn(houseInfoObj);
@@ -165,7 +165,7 @@ class ProjectServiceTest {
 
         Asset a1 = Asset.builder().ossUrl("u1").duration(1.0).build();
         Asset a2 = Asset.builder().ossUrl("u2").duration(2.0).build();
-        when(assetRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(List.of(a1, a2));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(a1, a2));
 
         projectService.renderVideo(projectId);
 
@@ -179,12 +179,17 @@ class ProjectServiceTest {
     }
 
     @Test
-    void uploadAsset_updatesStatusWhenDraftAndSubmitsAnalysisTask() {
+    void uploadAsset_updatesStatusWhenDraftAndSubmitsAnalysisTask() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
-        when(storageService.uploadFile(any())).thenReturn("oss");
+        // Mock local file transfer to avoid real file system access issues in test environment or assume success
+        // But since transferTo writes to disk, we might want to mock the file object itself more deeply or just verify flow.
+        // Actually, since we changed implementation to write to local disk first, we need to handle that.
+        // For unit test, we can't easily mock Paths.get or Files.createDirectories without PowerMock.
+        // But we can verify that taskQueueService receives a file:// url.
+        
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
             Asset a = invocation.getArgument(0);
             a.setId(UUID.randomUUID());
@@ -196,16 +201,20 @@ class ProjectServiceTest {
 
         verify(projectRepository).save(project);
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.UPLOADING);
-        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "oss");
+        
+        ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskQueueService).submitAnalysisTask(eq(projectId), eq(saved.getId()), urlCaptor.capture());
+        String capturedUrl = urlCaptor.getValue();
+        assertThat(capturedUrl).startsWith("file:///");
+        assertThat(capturedUrl).endsWith(".txt");
     }
 
     @Test
-    void uploadAsset_doesNotUpdateStatusWhenNotDraft() {
+    void uploadAsset_doesNotUpdateStatusWhenNotDraft() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.UPLOADING).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
-        when(storageService.uploadFile(any())).thenReturn("oss");
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> invocation.getArgument(0));
         var file = new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "x".getBytes());
 
@@ -224,4 +233,3 @@ class ProjectServiceTest {
                 .hasMessageContaining("Project not found");
     }
 }
-

@@ -238,39 +238,14 @@ const onSubmit = async () => {
     const projectId = createRes.data.id
     console.log('Project created:', projectId)
 
-    // 2. 并发上传文件 (Presigned URL 模式)
+    // 2. 上传文件 (FormData 模式，上传到后端本地)
     const uploadPromises = fileList.value.map(async (fileItem) => {
       try {
         fileItem.status = 'uploading'
         fileItem.message = '0%'
 
-        // Step 1: 获取 Presigned URL
-        const { data: presignData } = await projectApi.getPresignedUrl(
-          projectId, 
-          fileItem.file.name, 
-          fileItem.file.type
-        )
-
-        // Step 2: 直传 S3/R2
-        await axios.put(presignData.uploadUrl, fileItem.file, {
-          headers: {
-            'Content-Type': fileItem.file.type
-          },
-          onUploadProgress: (progressEvent) => {
-            if (progressEvent.total) {
-              const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-              fileItem.message = `${percent}%`
-            }
-          }
-        })
-
-        // Step 3: 确认上传
-        await projectApi.confirmAsset(projectId, {
-          objectKey: presignData.objectKey,
-          filename: fileItem.file.name,
-          contentType: fileItem.file.type,
-          size: fileItem.file.size
-        })
+        // 使用 FormData 直接上传
+        await projectApi.uploadAsset(projectId, fileItem.file)
 
         fileItem.status = 'done'
         fileItem.message = '完成'
