@@ -423,6 +423,27 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
             video_duration_sec=float(duration_sec or 0.0),
         )
 
+        if not Config.SMART_SPLIT_ENABLED:
+            _log_info(
+                "split.skip",
+                project_id=project_id,
+                asset_id=asset_id,
+                reason="disabled",
+                strategy=Config.SMART_SPLIT_STRATEGY,
+                video_duration_sec=float(duration_sec or 0.0),
+                min_duration_sec=float(Config.SMART_SPLIT_MIN_DURATION_SEC or 0.0),
+            )
+        elif duration_sec < Config.SMART_SPLIT_MIN_DURATION_SEC:
+            _log_info(
+                "split.skip",
+                project_id=project_id,
+                asset_id=asset_id,
+                reason="duration_too_short",
+                strategy=Config.SMART_SPLIT_STRATEGY,
+                video_duration_sec=float(duration_sec or 0.0),
+                min_duration_sec=float(Config.SMART_SPLIT_MIN_DURATION_SEC or 0.0),
+            )
+
         if (
             Config.SMART_SPLIT_ENABLED
             and duration_sec >= Config.SMART_SPLIT_MIN_DURATION_SEC

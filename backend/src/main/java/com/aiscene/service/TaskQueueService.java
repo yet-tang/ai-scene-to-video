@@ -45,7 +45,7 @@ public class TaskQueueService {
         log.info("Submitted analysis task task_id={} project_id={} asset_id={}", taskId, projectId, assetId);
     }
 
-    public void submitScriptGenerationTask(UUID projectId, Object houseInfo, java.util.List<Object> timelineData) {
+    public String submitScriptGenerationTask(UUID projectId, Object houseInfo, java.util.List<Object> timelineData) {
         Map<String, Object> extraHeaders = new HashMap<>();
         extraHeaders.put("project_id", projectId.toString());
         String taskId = sendCeleryTask(
@@ -54,6 +54,7 @@ public class TaskQueueService {
                 extraHeaders
         );
         log.info("Submitted script generation task task_id={} project_id={}", taskId, projectId);
+        return taskId;
     }
 
     public void submitAudioGenerationTask(UUID projectId, String scriptContent) {

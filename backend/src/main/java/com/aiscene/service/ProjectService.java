@@ -138,7 +138,7 @@ public class ProjectService {
     }
 
     @Transactional
-    public void generateScript(UUID projectId) {
+    public String generateScript(UUID projectId) {
         Project project = getProject(projectId);
         List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
 
@@ -154,7 +154,10 @@ public class ProjectService {
             return map;
         }).collect(Collectors.toList());
 
-        taskQueueService.submitScriptGenerationTask(projectId, houseInfo, timelineData);
+        project.setStatus(ProjectStatus.SCRIPT_GENERATING);
+        projectRepository.save(project);
+
+        return taskQueueService.submitScriptGenerationTask(projectId, houseInfo, timelineData);
     }
     
     @Transactional

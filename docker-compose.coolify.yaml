@@ -45,6 +45,9 @@ services:
       - DB_DSN=${DB_DSN} 
       # AI Service Keys
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - SMART_SPLIT_ENABLED=true
+      - SMART_SPLIT_STRATEGY=hybrid
+      - SMART_SPLIT_MIN_DURATION_SEC=10
       # S3 Configuration (For uploading final video)
       - S3_STORAGE_REGION=${S3_STORAGE_REGION}
       - S3_STORAGE_ENDPOINT=${S3_STORAGE_ENDPOINT}

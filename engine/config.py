@@ -27,7 +27,7 @@ class Config:
 
     LOCAL_ASSET_HTTP_BASE_URL = os.getenv("LOCAL_ASSET_HTTP_BASE_URL", "http://ai-scene-backend:8090/public")
 
-    SMART_SPLIT_ENABLED = os.getenv("SMART_SPLIT_ENABLED", "false").lower() in {"1", "true", "yes", "y"}
+    SMART_SPLIT_ENABLED = os.getenv("SMART_SPLIT_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
     SMART_SPLIT_STRATEGY = os.getenv("SMART_SPLIT_STRATEGY", "hybrid")
-    SMART_SPLIT_MIN_DURATION_SEC = float(os.getenv("SMART_SPLIT_MIN_DURATION_SEC", "60"))
+    SMART_SPLIT_MIN_DURATION_SEC = float(os.getenv("SMART_SPLIT_MIN_DURATION_SEC", "30"))
     SCENE_DETECT_THRESHOLD = float(os.getenv("SCENE_DETECT_THRESHOLD", "27.0"))

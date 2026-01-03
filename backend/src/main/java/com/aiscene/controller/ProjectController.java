@@ -7,6 +7,7 @@ import com.aiscene.dto.TimelineResponse;
 import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
+import com.aiscene.entity.ProjectStatus;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/v1/projects")
@@ -78,10 +81,26 @@ public class ProjectController {
         return ResponseEntity.ok(timeline);
     }
 
+    @GetMapping("/{id}/script")
+    public ResponseEntity<Map<String, Object>> getScript(@PathVariable UUID id) {
+        Project project = projectService.getProject(id);
+        Map<String, Object> body = new HashMap<>();
+        body.put("projectId", project.getId().toString());
+        body.put("status", project.getStatus() == null ? null : project.getStatus().name());
+        body.put("scriptContent", project.getScriptContent());
+        return ResponseEntity.ok(body);
+    }
+
     @PostMapping("/{id}/script")
-    public ResponseEntity<Void> generateScript(@PathVariable UUID id) {
-        projectService.generateScript(id);
-        return ResponseEntity.accepted().build();
+    public ResponseEntity<Map<String, Object>> generateScript(@PathVariable UUID id) {
+        String taskId = projectService.generateScript(id);
+        Project project = projectService.getProject(id);
+        Map<String, Object> body = new HashMap<>();
+        body.put("projectId", project.getId().toString());
+        body.put("taskId", taskId);
+        body.put("status", project.getStatus() == null ? ProjectStatus.SCRIPT_GENERATING.name() : project.getStatus().name());
+        body.put("scriptContent", project.getScriptContent());
+        return ResponseEntity.accepted().body(body);
     }
 
     @PostMapping("/{id}/audio")
