@@ -21,13 +21,13 @@ export interface UpdateAssetParams {
 
 export const projectApi = {
   create: (data: CreateProjectParams) => {
-    return client.post('/projects', data)
+    return client.post('/v1/projects', data)
   },
 
   uploadAsset: (projectId: string, file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return client.post(`/projects/${projectId}/assets`, formData, {
+    return client.post(`/v/projects/${projectId}/assets`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
@@ -35,19 +35,19 @@ export const projectApi = {
   },
 
   updateAsset: (projectId: string, assetId: string, data: UpdateAssetParams) => {
-    return client.put(`/projects/${projectId}/assets/${assetId}`, data)
+    return client.put(`/v1/projects/${projectId}/assets/${assetId}`, data)
   },
 
   getTimeline: (projectId: string) => {
-    return client.get(`/projects/${projectId}/timeline`)
+    return client.get(`/v1/projects/${projectId}/timeline`)
   },
 
   generateScript: (projectId: string) => {
-    return client.post(`/projects/${projectId}/script`)
+    return client.post(`/v1/projects/${projectId}/script`)
   },
 
   generateAudio: (projectId: string, scriptContent: string) => {
-    return client.post(`/projects/${projectId}/audio`, scriptContent, {
+    return client.post(`/v1/projects/${projectId}/audio`, scriptContent, {
         headers: {
             'Content-Type': 'text/plain; charset=utf-8'
         }
@@ -55,10 +55,10 @@ export const projectApi = {
   },
 
   renderVideo: (projectId: string) => {
-    return client.post(`/projects/${projectId}/render`)
+    return client.post(`/v1/projects/${projectId}/render`)
   },
 
   getProject: (projectId: string) => {
-    return client.get(`/projects/${projectId}`)
+    return client.get(`/v1/projects/${projectId}`)
   }
 }
