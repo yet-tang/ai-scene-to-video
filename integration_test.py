@@ -16,6 +16,10 @@ parser.add_argument(
     "--projects-path",
     default=os.getenv("AI_VIDEO_PROJECTS_PATH") or "/api/ai-video/v1/projects",
 )
+parser.add_argument(
+    "--video-path",
+    default=os.getenv("AI_VIDEO_TEST_VIDEO") or "normal_video.mp4",
+)
 args = parser.parse_args()
 
 BASE_URL = args.base_url.rstrip("/")
@@ -53,7 +57,17 @@ def check_status(response):
         except Exception:
             pass
         print(f"Error: {response.status_code}")
-        print(response.text)
+        try:
+            print(f"Response headers: {dict(response.headers)}")
+        except Exception:
+            pass
+        try:
+            text = response.text or ""
+            if len(text) > 2000:
+                text = text[:2000] + "...(truncated)"
+            print(text)
+        except Exception:
+            pass
         sys.exit(1)
     return response
 
@@ -79,17 +93,58 @@ def wait_for_status(project_id, target_status, timeout=300):
     print("Timeout waiting for status change.")
     sys.exit(1)
 
+def wait_for_asset_analysis(project_id, asset_id, timeout=300):
+    print(f"Waiting for asset {asset_id} to be analyzed...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        res = api_request("GET", f"{projects_path}/{project_id}/timeline")
+        if res.status_code == 404:
+            print("Timeline endpoint not found. Skipping analysis wait...")
+            return
+        if res.status_code != 200:
+            print(f"Failed to fetch timeline: {res.status_code}")
+            time.sleep(5)
+            continue
+
+        data = res.json() or {}
+        assets = data.get("assets") or []
+        for asset in assets:
+            if str(asset.get("id")) != str(asset_id):
+                continue
+            scene_label = asset.get("sceneLabel") or asset.get("scene_label")
+            if scene_label:
+                print(f"Asset analyzed: sceneLabel={scene_label}")
+                return
+            print("Asset analysis not finished yet.")
+            break
+
+        time.sleep(5)
+
+    print("Timeout waiting for asset analysis.")
+    sys.exit(1)
+
 def main():
+    health_paths = ["/health", "/api/ai-video/health"]
+    health_ok = False
+    for health_path in health_paths:
+        res = api_request("GET", health_path)
+        if res.status_code == 200:
+            health_ok = True
+            break
+    if not health_ok:
+        print("Health check failed.")
+        check_status(res)
+
     # 1. Create Project
     print("\n--- Step 1: Create Project ---")
     project_payload = {
         "userId": 1,
-        "title": "Coolify Deployment Test",
+        "title": "山水人家 2室1厅 340万",
         "houseInfo": {
-            "room": 3,
-            "hall": 2,
-            "area": 120,
-            "price": 500
+            "community": "山水人家",
+            "room": 2,
+            "hall": 1,
+            "price": 340
         }
     }
     res = api_request("POST", projects_path, json=project_payload)
@@ -98,46 +153,34 @@ def main():
     project_id = project_data.get("id")
     print(f"Project Created: {project_id}")
 
-    # 2. Upload Asset (Mocking a small video file)
+    # 2. Upload Asset
     print("\n--- Step 2: Upload Asset ---")
-    # Create a dummy file
-    dummy_filename = "normal_video.mp4"
-    with open(dummy_filename, "wb") as f:
-        f.write(b"fake video content for testing flow logic, not actual processing")
-    
-    files = {'file': (dummy_filename, open(dummy_filename, 'rb'), 'video/mp4')}
-    res = api_request("POST", f"{projects_path}/{project_id}/assets", files=files)
-    check_status(res)
-    asset_data = res.json()
-    print(f"Asset Uploaded: {asset_data.get('id')}")
-    
-    # Clean up dummy file
-    os.remove(dummy_filename)
+    video_path = args.video_path
+    if not os.path.isfile(video_path):
+        print(f"Video file not found: {video_path}")
+        sys.exit(1)
 
-    # 3. Analyze (Might fail if worker tries to open fake video, but let's try to trigger it)
-    # Note: If the worker uses OpenCV on "fake video content", it will likely fail or return empty features.
-    # Ideally we upload a real small MP4. But for connection testing, this proves the task is dispatched.
-    # If it fails in worker, the status might go to FAILED or stay stuck.
-    # For a robust test, user should replace dummy file with real file if they want to test AI.
-    print("\n--- Step 3: Trigger Analysis ---")
-    # Actually, we need to trigger analysis. The API for that?
-    # Based on PRD, it might be automatic or explicit.
-    # Looking at ProjectController, there is NO explicit analyze endpoint in the snippet I saw earlier?
-    # Wait, I saw `generateScript` etc.
-    # Let me check ProjectController again. I missed `analyze` endpoint or it's implicitly triggered on upload?
-    # PRD says `POST /api/ai-video/v1/projects/{id}/analyze`.
-    # Let's assume it exists or check if I missed it.
-    # If not, I'll skip to Script Generation which takes manual input if analysis is missing.
-    
-    # Let's try to call analyze
-    res = api_request("POST", f"{projects_path}/{project_id}/analyze")
-    if res.status_code == 404:
-        print("Analyze endpoint not found, maybe triggered automatically or missing. Skipping...")
-    else:
-        check_status(res)
-        print("Analysis triggered.")
-        # Wait for some status if applicable, but Asset analysis is per asset.
-        # Project status might not change to "ANALYZED" until all assets are done.
+    filename = os.path.basename(video_path)
+    upload_res = None
+    for attempt in range(1, 4):
+        with open(video_path, "rb") as f:
+            files = {"file": (filename, f, "video/mp4")}
+            upload_res = api_request("POST", f"{projects_path}/{project_id}/assets", files=files)
+        if upload_res.status_code in (502, 503, 504):
+            print(f"Upload attempt {attempt} failed: {upload_res.status_code}")
+            time.sleep(2 * attempt)
+            continue
+        break
+
+    check_status(upload_res)
+    asset_data = upload_res.json()
+    print(f"Asset Uploaded: {asset_data.get('id')}")
+
+    # 3. Analyze
+    print("\n--- Step 3: Wait For Analysis ---")
+    asset_id = asset_data.get("id")
+    if asset_id:
+        wait_for_asset_analysis(project_id, asset_id)
     
     # 4. Generate Script
     print("\n--- Step 4: Generate Script ---")

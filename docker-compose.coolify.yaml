@@ -24,7 +24,7 @@ services:
       - S3_STORAGE_PUBLIC_URL=${S3_STORAGE_PUBLIC_URL}
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/api/ai-video/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
       timeout: 10s
       retries: 3
