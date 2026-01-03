@@ -25,6 +25,8 @@ class Config:
     S3_STORAGE_BUCKET = os.getenv("S3_STORAGE_BUCKET", "ai-scene-assets")
     S3_STORAGE_PUBLIC_URL = os.getenv("S3_STORAGE_PUBLIC_URL")
 
+    LOCAL_ASSET_HTTP_BASE_URL = os.getenv("LOCAL_ASSET_HTTP_BASE_URL", "http://ai-scene-backend:8090/public")
+
     SMART_SPLIT_ENABLED = os.getenv("SMART_SPLIT_ENABLED", "false").lower() in {"1", "true", "yes", "y"}
     SMART_SPLIT_STRATEGY = os.getenv("SMART_SPLIT_STRATEGY", "hybrid")
     SMART_SPLIT_MIN_DURATION_SEC = float(os.getenv("SMART_SPLIT_MIN_DURATION_SEC", "60"))

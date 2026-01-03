@@ -79,7 +79,10 @@ def _download_to_temp(video_url: str) -> str:
         local_path = video_url.replace("file://", "")
         if os.path.exists(local_path):
             return local_path
-        # If not exists (e.g. cross-container), fallback to urlretrieve (might fail if not accessible)
+        filename = os.path.basename(local_path)
+        base = (Config.LOCAL_ASSET_HTTP_BASE_URL or "").rstrip("/")
+        if base:
+            video_url = f"{base}/{filename}"
     
     temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     temp_video.close()
@@ -135,6 +138,44 @@ def _coerce_segments(raw: dict) -> list[dict]:
 
     normalized.sort(key=lambda x: x["start_sec"])
     return normalized
+
+def _advance_project_status(project_id: str):
+    conn = psycopg2.connect(Config.DB_DSN)
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE projects
+                    SET status = 'ANALYZING'
+                    WHERE id = %s
+                      AND status IN ('UPLOADING')
+                    """,
+                    (project_id,),
+                )
+                cursor.execute(
+                    """
+                    SELECT COUNT(1)
+                    FROM assets
+                    WHERE project_id = %s
+                      AND is_deleted = FALSE
+                      AND scene_label IS NULL
+                    """,
+                    (project_id,),
+                )
+                remaining = int(cursor.fetchone()[0] or 0)
+                if remaining == 0:
+                    cursor.execute(
+                        """
+                        UPDATE projects
+                        SET status = 'REVIEW'
+                        WHERE id = %s
+                          AND status IN ('UPLOADING', 'ANALYZING')
+                        """,
+                        (project_id,),
+                    )
+    finally:
+        conn.close()
 
 def _process_split_logic(project_id: str, asset_id: str, video_url: str, segments: list, local_video_path: str = None):
     if len(segments) >= 2:
@@ -265,10 +306,13 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
     """
     Background task to analyze a video asset.
     """
-    logger.info(f"Starting analysis for asset {asset_id} in project {project_id}")
+    logger.info(f"Received analyze_video_task for asset {asset_id} in project {project_id}. URL: {video_url}")
     
     try:
-        duration_sec = _get_video_duration_sec(video_url)
+        _advance_project_status(project_id)
+        local_video = _download_to_temp(video_url)
+        cleanup_local_video = not local_video.startswith("/tmp/ai-video-uploads/")
+        duration_sec = _get_video_duration_sec(local_video)
 
         if (
             Config.SMART_SPLIT_ENABLED
@@ -280,20 +324,18 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                 segments_raw = _parse_model_json(segments_text)
                 segments = _coerce_segments(segments_raw)
                 _process_split_logic(project_id, asset_id, video_url, segments)
+                _advance_project_status(project_id)
+                if cleanup_local_video and os.path.exists(local_video):
+                    os.remove(local_video)
                 return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
             # Branch 2: Hybrid (SceneDetect + Qwen Image)
             elif Config.SMART_SPLIT_STRATEGY == "hybrid":
-                # 1. Download Video
-                local_video = _download_to_temp(video_url)
                 try:
-                    # 2. Detect Shots
                     shots = detector.detect_video_shots(local_video, threshold=Config.SCENE_DETECT_THRESHOLD)
                     if not shots:
-                        # Fallback if no shots detected (e.g. static video), treat as one shot
                         shots = [(0.0, duration_sec)]
                     
-                    # 3. Extract Middle Frame for each shot
                     shot_frames = []
                     import cv2
                     cap = cv2.VideoCapture(local_video)
@@ -305,7 +347,6 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                             ret, frame = cap.read()
                             if ret:
                                 temp_img = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-                                # Resize for token saving
                                 h, w = frame.shape[:2]
                                 max_dim = 1024
                                 if w > max_dim or h > max_dim:
@@ -321,26 +362,24 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                     finally:
                         cap.release()
 
-                    # 4. Semantic Grouping
                     if shot_frames:
                         segments_text = detector.analyze_shot_grouping(shot_frames)
                         segments_raw = _parse_model_json(segments_text)
                         segments = _coerce_segments(segments_raw)
                         
-                        # Cleanup temp images
                         for sf in shot_frames:
                             if os.path.exists(sf["image"]):
                                 os.remove(sf["image"])
 
-                        # 5. Execute Split
                         _process_split_logic(project_id, asset_id, video_url, segments, local_video_path=local_video)
+                        _advance_project_status(project_id)
                         return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
                 finally:
-                    if os.path.exists(local_video):
+                    if cleanup_local_video and os.path.exists(local_video):
                         os.remove(local_video)
 
-        frame_paths = detector.extract_key_frames(video_url, num_frames=5)
+        frame_paths = detector.extract_key_frames(local_video, num_frames=5)
         result_json_str = detector.analyze_scene_from_frames(frame_paths)
         result_data = _parse_model_json(result_json_str)
         logger.info(f"Analysis result for {asset_id}: {result_data}")
@@ -367,6 +406,11 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
             logger.info(f"Updated DB for asset {asset_id}")
         finally:
             conn.close()
+
+        _advance_project_status(project_id)
+
+        if cleanup_local_video and os.path.exists(local_video):
+            os.remove(local_video)
 
         return {"project_id": project_id, "asset_id": asset_id, "analysis": result_data}
 

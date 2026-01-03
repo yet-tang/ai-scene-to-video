@@ -9,6 +9,9 @@ import org.slf4j.MDC;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -25,11 +28,6 @@ public class TaskQueueService {
     private static final String QUEUE_NAME = "celery"; 
 
     public void submitAnalysisTask(UUID projectId, UUID assetId, String videoUrl) {
-        // ... existing implementation
-        // Re-implementing just to keep context, but actually we should just add new methods
-        // To avoid SearchReplace complexity on existing method, I will assume it's there and add new ones.
-        // Wait, SearchReplace replaces the whole chunk.
-        
         AnalyzeTaskDto taskDto = AnalyzeTaskDto.builder()
                 .project_id(projectId.toString())
                 .asset_id(assetId.toString())
@@ -58,42 +56,62 @@ public class TaskQueueService {
     private void sendCeleryTask(String taskName, Object[] args) {
         try {
             String taskId = UUID.randomUUID().toString();
-            CeleryMessage message = new CeleryMessage(taskId, taskName, args);
-            
-            // Inject Trace ID from MDC
+
+            Map<String, Object> headers = new HashMap<>();
+            headers.put("lang", "py");
+            headers.put("task", taskName);
+            headers.put("id", taskId);
+            headers.put("root_id", taskId);
+            headers.put("parent_id", null);
+            headers.put("group", null);
+            headers.put("retries", 0);
+            headers.put("timelimit", Arrays.asList(null, null));
+            headers.put("argsrepr", Arrays.toString(args));
+            headers.put("kwargsrepr", "{}");
+
             String requestId = MDC.get("request_id");
             if (requestId != null) {
-                message.headers.put("request_id", requestId);
+                headers.put("request_id", requestId);
             }
-            
-            // Inject User ID from MDC (if present)
             String userId = MDC.get("user_id");
             if (userId != null) {
-                message.headers.put("user_id", userId);
+                headers.put("user_id", userId);
             }
-            
+
+            Map<String, Object> embed = new HashMap<>();
+            embed.put("callbacks", null);
+            embed.put("errbacks", null);
+            embed.put("chain", null);
+            embed.put("chord", null);
+
+            Object[] bodyTuple = new Object[]{Arrays.asList(args), new HashMap<>(), embed};
+            String bodyJson = objectMapper.writeValueAsString(bodyTuple);
+            String bodyBase64 = Base64.getEncoder().encodeToString(bodyJson.getBytes(StandardCharsets.UTF_8));
+
+            Map<String, Object> properties = new HashMap<>();
+            properties.put("correlation_id", taskId);
+            properties.put("reply_to", UUID.randomUUID().toString());
+            properties.put("delivery_mode", 2);
+            properties.put("delivery_tag", UUID.randomUUID().toString());
+            properties.put("priority", 0);
+            properties.put("body_encoding", "base64");
+            Map<String, Object> deliveryInfo = new HashMap<>();
+            deliveryInfo.put("exchange", "");
+            deliveryInfo.put("routing_key", QUEUE_NAME);
+            properties.put("delivery_info", deliveryInfo);
+
+            Map<String, Object> message = new HashMap<>();
+            message.put("body", bodyBase64);
+            message.put("content-encoding", "utf-8");
+            message.put("content-type", "application/json");
+            message.put("headers", headers);
+            message.put("properties", properties);
+
             String jsonMessage = objectMapper.writeValueAsString(message);
             redisTemplate.opsForList().leftPush(QUEUE_NAME, jsonMessage);
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize task message for {}", taskName, e);
             throw new RuntimeException("Failed to submit task", e);
-        }
-    }
-
-    // Inner class for Celery Message Structure
-    // Using simple POJO to avoid Lombok issues in inner class for this snippet
-    private static class CeleryMessage {
-        public String id;
-        public String task;
-        public Object[] args;
-        public Map<String, Object> kwargs = new HashMap<>();
-        public Map<String, Object> headers = new HashMap<>();
-        public int retries = 0;
-
-        public CeleryMessage(String id, String task, Object[] args) {
-            this.id = id;
-            this.task = task;
-            this.args = args;
         }
     }
 }

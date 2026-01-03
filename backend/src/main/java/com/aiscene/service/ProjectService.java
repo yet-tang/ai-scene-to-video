@@ -11,6 +11,7 @@ import com.aiscene.repository.ProjectRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -35,13 +36,15 @@ public class ProjectService {
     private final TaskQueueService taskQueueService;
     private final ObjectMapper objectMapper;
 
+    @Value("${app.local-asset-base-url:http://ai-scene-backend:8090/public}")
+    private String localAssetBaseUrl;
+
     // ... existing methods ...
 
     @Transactional
     public Asset confirmAsset(UUID projectId, AssetConfirmRequest request) {
         Project project = getProject(projectId);
 
-        // Update status to UPLOADING if it's DRAFT
         if (project.getStatus() == ProjectStatus.DRAFT) {
             project.setStatus(ProjectStatus.UPLOADING);
             projectRepository.save(project);
@@ -63,6 +66,11 @@ public class ProjectService {
 
         // Submit Analysis Task
         taskQueueService.submitAnalysisTask(project.getId(), savedAsset.getId(), savedAsset.getOssUrl());
+
+        if (project.getStatus() == ProjectStatus.DRAFT || project.getStatus() == ProjectStatus.UPLOADING) {
+            project.setStatus(ProjectStatus.ANALYZING);
+            projectRepository.save(project);
+        }
 
         return savedAsset;
     }
@@ -223,7 +231,6 @@ public class ProjectService {
     public Asset uploadAsset(UUID projectId, MultipartFile file) {
         Project project = getProject(projectId);
         
-        // Update status to UPLOADING if it's DRAFT
         if (project.getStatus() == ProjectStatus.DRAFT) {
             project.setStatus(ProjectStatus.UPLOADING);
             projectRepository.save(project);
@@ -270,6 +277,11 @@ public class ProjectService {
         // Submit Analysis Task to Redis Queue
         taskQueueService.submitAnalysisTask(project.getId(), savedAsset.getId(), savedAsset.getOssUrl());
 
+        if (project.getStatus() == ProjectStatus.DRAFT || project.getStatus() == ProjectStatus.UPLOADING) {
+            project.setStatus(ProjectStatus.ANALYZING);
+            projectRepository.save(project);
+        }
+
         return savedAsset;
     }
 
@@ -277,7 +289,6 @@ public class ProjectService {
     public Asset uploadAssetLocal(UUID projectId, MultipartFile file) {
         Project project = getProject(projectId);
 
-        // Update status to UPLOADING if it's DRAFT
         if (project.getStatus() == ProjectStatus.DRAFT) {
             project.setStatus(ProjectStatus.UPLOADING);
             projectRepository.save(project);
@@ -285,13 +296,11 @@ public class ProjectService {
 
         String ossUrl;
         try {
-            // Ensure temp directory exists
             java.nio.file.Path tempDir = java.nio.file.Paths.get("/tmp/ai-video-uploads");
             if (!java.nio.file.Files.exists(tempDir)) {
                 java.nio.file.Files.createDirectories(tempDir);
             }
 
-            // Save file to local temp
             String originalFilename = file.getOriginalFilename();
             String extension = "";
             if (originalFilename != null && originalFilename.contains(".")) {
@@ -301,27 +310,32 @@ public class ProjectService {
             java.nio.file.Path localPath = tempDir.resolve(localFilename);
             file.transferTo(localPath.toFile());
 
-            // Use file:// protocol for Worker to recognize local path
-            // But for frontend playback, we need to map it to our http endpoint if we want it to work in browser immediately
-            // However, the worker expects file:// or http://.
-            // Our store logic handles file:// -> http:// conversion.
-            ossUrl = "file://" + localPath.toAbsolutePath().toString();
+            String base = localAssetBaseUrl == null ? "" : localAssetBaseUrl.trim();
+            if (base.endsWith("/")) {
+                base = base.substring(0, base.length() - 1);
+            }
+            ossUrl = base + "/" + localFilename;
 
         } catch (java.io.IOException e) {
             throw new RuntimeException("Failed to save file locally", e);
         }
 
+        int nextSortOrder = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).size();
         Asset asset = Asset.builder()
                 .project(project)
                 .ossUrl(ossUrl)
                 .duration(0.0)
-                .sortOrder(0)
+                .sortOrder(nextSortOrder)
                 .build();
 
         Asset savedAsset = assetRepository.save(asset);
 
-        // Submit Analysis Task to Redis Queue
         taskQueueService.submitAnalysisTask(project.getId(), savedAsset.getId(), savedAsset.getOssUrl());
+
+        if (project.getStatus() == ProjectStatus.DRAFT || project.getStatus() == ProjectStatus.UPLOADING) {
+            project.setStatus(ProjectStatus.ANALYZING);
+            projectRepository.save(project);
+        }
 
         return savedAsset;
     }

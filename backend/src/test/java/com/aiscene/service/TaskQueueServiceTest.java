@@ -10,6 +10,8 @@ import org.slf4j.MDC;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,10 +49,16 @@ class TaskQueueServiceTest {
         verify(listOps).leftPush(anyString(), payloadCaptor.capture());
 
         JsonNode json = objectMapper.readTree(payloadCaptor.getValue());
-        assertThat(json.get("task").asText()).isEqualTo("tasks.analyze_video_task");
-        assertThat(json.get("args")).isNotNull();
+        assertThat(json.get("headers").get("task").asText()).isEqualTo("tasks.analyze_video_task");
         assertThat(json.get("headers").get("request_id").asText()).isEqualTo("r1");
         assertThat(json.get("headers").get("user_id").asText()).isEqualTo("u1");
+
+        String body = json.get("body").asText();
+        String decoded = new String(Base64.getDecoder().decode(body), StandardCharsets.UTF_8);
+        JsonNode bodyJson = objectMapper.readTree(decoded);
+        assertThat(bodyJson.get(0).get(0).asText()).isEqualTo(projectId.toString());
+        assertThat(bodyJson.get(0).get(1).asText()).isEqualTo(assetId.toString());
+        assertThat(bodyJson.get(0).get(2).asText()).isEqualTo("v");
     }
 
     @Test
@@ -68,9 +76,12 @@ class TaskQueueServiceTest {
         verify(listOps).leftPush(anyString(), payloadCaptor.capture());
 
         JsonNode json = objectMapper.readTree(payloadCaptor.getValue());
-        assertThat(json.get("task").asText()).isEqualTo("tasks.generate_script_task");
-        assertThat(json.get("args").get(0).asText()).isEqualTo(projectId.toString());
-        assertThat(json.get("args").get(1).get("x").asInt()).isEqualTo(1);
+        assertThat(json.get("headers").get("task").asText()).isEqualTo("tasks.generate_script_task");
+
+        String body = json.get("body").asText();
+        String decoded = new String(Base64.getDecoder().decode(body), StandardCharsets.UTF_8);
+        JsonNode bodyJson = objectMapper.readTree(decoded);
+        assertThat(bodyJson.get(0).get(0).asText()).isEqualTo(projectId.toString());
+        assertThat(bodyJson.get(0).get(1).get("x").asInt()).isEqualTo(1);
     }
 }
-

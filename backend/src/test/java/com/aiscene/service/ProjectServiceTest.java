@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -199,8 +200,8 @@ class ProjectServiceTest {
         var file = new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "x".getBytes());
         Asset saved = projectService.uploadAsset(projectId, file);
 
-        verify(projectRepository).save(project);
-        assertThat(project.getStatus()).isEqualTo(ProjectStatus.UPLOADING);
+        verify(projectRepository, times(2)).save(project);
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
         
         ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
         verify(taskQueueService).submitAnalysisTask(eq(projectId), eq(saved.getId()), urlCaptor.capture());
@@ -210,7 +211,7 @@ class ProjectServiceTest {
     }
 
     @Test
-    void uploadAsset_doesNotUpdateStatusWhenNotDraft() throws java.io.IOException {
+    void uploadAsset_advancesStatusWhenUploading() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.UPLOADING).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
@@ -220,7 +221,8 @@ class ProjectServiceTest {
 
         projectService.uploadAsset(projectId, file);
 
-        verify(projectRepository, never()).save(project);
+        verify(projectRepository).save(project);
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
     }
 
     @Test
