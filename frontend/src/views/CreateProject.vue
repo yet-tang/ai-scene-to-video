@@ -1,24 +1,49 @@
 <template>
   <div class="create-project">
-    <van-nav-bar title="新建房源视频" />
+    <van-nav-bar title="发布房源视频" />
 
     <van-form @submit="onSubmit">
       <!-- 1. 基础信息 -->
-      <van-cell-group inset title="基础信息 (必填)">
+      <div class="section-title">1. 基础信息</div>
+      <van-cell-group class="form-card">
         <van-field
           v-model="formData.communityName"
           name="communityName"
           label="小区名称"
-          placeholder="请输入小区名 (如: 阳光花园)"
+          placeholder="例如: 阳光花园"
           :rules="[{ required: true, message: '请填写小区名称' }]"
         />
         
         <van-field name="layout" label="户型结构">
           <template #input>
-            <div class="layout-steppers">
-              <van-stepper v-model="formData.layout.room" min="1" max="9" button-size="22" /> 室
-              <van-stepper v-model="formData.layout.hall" min="0" max="5" button-size="22" /> 厅
-              <van-stepper v-model="formData.layout.restroom" min="0" max="5" button-size="22" /> 卫
+            <div class="layout-inputs">
+              <div class="input-item">
+                <input 
+                  type="number" 
+                  v-model="formData.layout.room" 
+                  class="mini-input"
+                  placeholder="2"
+                />
+                <span class="unit">室</span>
+              </div>
+              <div class="input-item">
+                <input 
+                  type="number" 
+                  v-model="formData.layout.hall" 
+                  class="mini-input"
+                  placeholder="1"
+                />
+                <span class="unit">厅</span>
+              </div>
+              <div class="input-item">
+                <input 
+                  type="number" 
+                  v-model="formData.layout.restroom" 
+                  class="mini-input"
+                  placeholder="1"
+                />
+                <span class="unit">卫</span>
+              </div>
             </div>
           </template>
         </van-field>
@@ -28,7 +53,7 @@
           name="area"
           label="建筑面积"
           type="number"
-          placeholder="请输入数字"
+          placeholder="0"
           :rules="[{ required: true, message: '请填写面积' }]"
         >
           <template #right-icon>㎡</template>
@@ -39,7 +64,7 @@
           name="price"
           label="挂牌价格"
           type="number"
-          placeholder="请输入数字"
+          placeholder="0"
           :rules="[{ required: true, message: '请填写价格' }]"
         >
           <template #right-icon>万</template>
@@ -47,51 +72,82 @@
       </van-cell-group>
 
       <!-- 2. 核心卖点 -->
-      <van-cell-group inset title="核心卖点 (选填 - 帮助 AI 写文案)">
-        <van-field name="sellingPoints">
-          <template #input>
-            <van-checkbox-group v-model="formData.sellingPoints" direction="horizontal">
-              <van-checkbox name="学区房" shape="square">学区房</van-checkbox>
-              <van-checkbox name="地铁沿线" shape="square">地铁沿线</van-checkbox>
-              <van-checkbox name="南北通透" shape="square">南北通透</van-checkbox>
-              <van-checkbox name="急售" shape="square">急售</van-checkbox>
-              <van-checkbox name="全新装修" shape="square">全新装修</van-checkbox>
-              <van-checkbox name="满五唯一" shape="square">满五唯一</van-checkbox>
-            </van-checkbox-group>
-          </template>
-        </van-field>
+      <div class="section-title">
+        2. 核心卖点 <span class="sub-title">(帮助 AI 生成专业文案)</span>
+      </div>
+      <van-cell-group class="form-card">
+        <div class="selling-points-container">
+          <div 
+            v-for="item in sellingPointOptions" 
+            :key="item"
+            class="tag-item"
+            :class="{ active: formData.sellingPoints.includes(item) }"
+            @click="toggleSellingPoint(item)"
+          >
+            {{ item }}
+          </div>
+        </div>
         <van-field
           v-model="formData.remarks"
           rows="2"
           autosize
-          label="其他补充"
+          label="补充说明"
           type="textarea"
-          placeholder="如：房东出国，看房方便..."
+          placeholder="例如: 房东急售，看房方便..."
+          class="remark-field"
         />
       </van-cell-group>
 
       <!-- 3. 素材上传 -->
-      <van-cell-group inset title="素材上传">
-        <div class="upload-container">
+      <div class="section-title">
+        3. 素材上传 <span class="sub-title">(建议 3-5 段竖屏视频)</span>
+      </div>
+      <van-cell-group class="form-card upload-card">
+        <div class="upload-grid">
+          <div v-for="(item, index) in fileList" :key="index" class="preview-item">
+            <video 
+              :src="item.objectUrl || getObjectURL(item.file)" 
+              class="video-thumb" 
+              muted 
+              preload="metadata"
+              playsinline
+            ></video>
+            <div class="delete-mask" @click.stop="removeFile(index)">
+              <van-icon name="cross" size="12" />
+            </div>
+          </div>
+          
           <van-uploader
             v-model="fileList"
             multiple
             accept="video/*"
             :max-size="500 * 1024 * 1024"
             @oversize="onOversize"
+            :preview-image="false"
+            :after-read="afterRead"
           >
             <div class="upload-placeholder">
-              <van-icon name="plus" size="24" />
-              <div class="text">点击上传视频片段</div>
-              <div class="sub-text">建议 3-5 段竖屏视频</div>
+              <div class="icon-wrapper">
+                <van-icon name="plus" size="24" color="#fff" />
+              </div>
+              <div class="text">点击上传视频</div>
+              <div class="sub-text">支持批量上传</div>
             </div>
           </van-uploader>
         </div>
       </van-cell-group>
 
-      <div style="margin: 12px;">
-        <van-button round block type="primary" native-type="submit" :loading="isSubmitting" loading-text="正在处理...">
-          开始制作
+      <div class="submit-bar">
+        <van-button 
+          round 
+          block 
+          type="primary" 
+          native-type="submit" 
+          :loading="isSubmitting" 
+          loading-text="正在智能分析画面..."
+          color="linear-gradient(to right, #1989fa, #39b9f5)"
+        >
+          一键生成视频
         </van-button>
       </div>
     </van-form>
@@ -101,12 +157,15 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { useProjectStore, type ProjectInfo, type Asset } from '../stores/project'
+import { useProjectStore, type ProjectInfo } from '../stores/project'
 import { projectApi } from '../api/project'
 import { showToast } from 'vant'
 
 const router = useRouter()
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const projectStore = useProjectStore()
+
+const sellingPointOptions = ['学区房', '地铁沿线', '南北通透', '急售', '全新装修', '满五唯一', '视野开阔', '带车位']
 
 const formData = reactive<ProjectInfo>({
   communityName: '',
@@ -120,8 +179,35 @@ const formData = reactive<ProjectInfo>({
 const fileList = ref<any[]>([])
 const isSubmitting = ref(false)
 
+const toggleSellingPoint = (item: string) => {
+  const index = formData.sellingPoints.indexOf(item)
+  if (index > -1) {
+    formData.sellingPoints.splice(index, 1)
+  } else {
+    formData.sellingPoints.push(item)
+  }
+}
+
 const onOversize = () => {
   showToast('文件大小不能超过 500MB')
+}
+
+const getObjectURL = (file: File) => {
+  if (!file) return ''
+  return URL.createObjectURL(file)
+}
+
+const removeFile = (index: number) => {
+  fileList.value.splice(index, 1)
+}
+
+const afterRead = (file: any) => {
+  const files = Array.isArray(file) ? file : [file]
+  files.forEach((f: any) => {
+    if (f.file) {
+      f.objectUrl = URL.createObjectURL(f.file)
+    }
+  })
 }
 
 const onSubmit = async () => {
@@ -173,24 +259,135 @@ const onSubmit = async () => {
 
 <style scoped>
 .create-project {
-  padding-bottom: 12px;
+  padding-bottom: 40px;
+  background-color: #f7f8fa;
+  min-height: 100vh;
 }
 
-.layout-steppers {
+.section-title {
+  padding: 16px 16px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #323233;
+}
+
+.sub-title {
+  font-size: 12px;
+  font-weight: normal;
+  color: #969799;
+  margin-left: 4px;
+}
+
+.form-card {
+  /* overflow: hidden; */
+  /* box-shadow: 0 2px 8px rgba(0,0,0,0.02); */
+}
+
+.layout-inputs {
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+.input-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mini-input {
+  width: 40px;
+  height: 30px;
+  border: 1px solid #dcdee0;
+  border-radius: 4px;
+  text-align: center;
+  font-size: 14px;
+  color: #323233;
+  padding: 0;
+  background-color: #f7f8fa;
+}
+
+.mini-input:focus {
+  border-color: #1989fa;
+  background-color: #fff;
+  outline: none;
+}
+
+.input-item .unit {
+  font-size: 14px;
+  color: #323233;
+}
+
+.selling-points-container {
+  padding: 16px;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-.upload-container {
-  padding: 12px;
+.tag-item {
+  padding: 6px 12px;
+  background-color: #f5f6f7;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #646566;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.tag-item.active {
+  background-color: #e8f3ff;
+  color: #1989fa;
+  border-color: #1989fa;
+  font-weight: 500;
+}
+
+.upload-card {
+  padding: 20px 0;
+}
+
+.upload-grid {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px;
+}
+
+.preview-item {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #000;
+}
+
+.video-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.delete-mask {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  background: rgba(0,0,0,0.5);
+  border-bottom-left-radius: 8px;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  color: #fff;
+  cursor: pointer;
+  z-index: 1;
 }
 
 .upload-placeholder {
-  width: 100%;
-  height: 120px;
+  width: 100px;
+  height: 100px;
   background-color: #f7f8fa;
   border: 1px dashed #dcdee0;
   border-radius: 8px;
@@ -198,22 +395,36 @@ const onSubmit = async () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #969799;
+}
+
+.icon-wrapper {
+  width: 32px;
+  height: 32px;
+  background: #1989fa;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
 }
 
 .upload-placeholder .text {
-  margin-top: 8px;
-  font-size: 14px;
+  font-size: 12px;
+  color: #323233;
+  font-weight: 500;
 }
 
 .upload-placeholder .sub-text {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #c8c9cc;
+  font-size: 10px;
+  color: #969799;
+  margin-top: 2px;
 }
 
-:deep(.van-checkbox) {
-  margin-bottom: 8px;
-  margin-right: 8px;
+.submit-bar {
+  margin: 32px 16px;
+}
+
+:deep(.van-field__label) {
+  color: #646566;
 }
 </style>

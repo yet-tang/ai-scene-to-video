@@ -4,9 +4,12 @@
       title="制作完成"
       left-arrow
       @click-left="router.push('/create')"
+      :border="false"
+      class="transparent-nav"
     />
 
     <div class="result-container" v-if="projectStore.currentProject.finalVideoUrl">
+      <!-- 视频播放区域 -->
       <div class="video-wrapper">
         <video 
           :src="projectStore.currentProject.finalVideoUrl" 
@@ -17,21 +20,29 @@
         ></video>
       </div>
 
-      <div class="success-tips">
-        <van-icon name="checked" color="#07c160" size="48" />
-        <div class="title">视频生成成功!</div>
-        <div class="desc">已自动合成解说词与字幕</div>
+      <!-- 成功信息 -->
+      <div class="success-card">
+        <div class="success-icon-wrapper">
+          <van-icon name="success" color="#fff" size="24" />
+        </div>
+        <div class="title">视频制作成功</div>
+        <div class="desc">
+          AI 已为您完成剪辑、配音与字幕<br>
+          <span class="highlight">专业房产解说风格</span>
+        </div>
       </div>
 
+      <!-- 操作按钮 -->
       <div class="action-buttons">
         <van-button 
           round 
           block 
           type="primary" 
-          class="mb-16"
+          class="mb-16 main-btn"
+          color="linear-gradient(to right, #1989fa, #39b9f5)"
           @click="downloadVideo"
         >
-          保存到相册
+          <van-icon name="down" class="btn-icon" /> 保存到相册
         </van-button>
         
         <van-button 
@@ -42,29 +53,32 @@
           class="mb-16"
           @click="shareVideo"
         >
-          复制链接分享
+          <van-icon name="share" class="btn-icon" /> 复制链接分享
         </van-button>
 
-        <van-button 
-          round 
-          block 
-          plain 
-          @click="router.push('/create')"
-        >
-          再做一个
-        </van-button>
+        <div class="secondary-actions">
+          <span @click="router.push('/create')">再做一个</span>
+        </div>
       </div>
     </div>
 
     <div class="loading-state" v-else-if="isLoading || projectStore.currentProject.status === 'RENDERING' || projectStore.currentProject.status === 'AUDIO_GENERATED'">
-      <van-loading size="48px" vertical>视频合成中...</van-loading>
-      <div class="loading-desc">预计耗时 1-2 分钟，请稍候</div>
+      <div class="loading-content">
+        <van-loading size="48px" type="spinner" color="#1989fa" vertical>
+          <div class="loading-text">正在合成视频...</div>
+        </van-loading>
+        <div class="loading-steps">
+          <div class="step active">1. 生成语音</div>
+          <div class="step active">2. 智能剪辑</div>
+          <div class="step">3. 合成字幕</div>
+        </div>
+      </div>
     </div>
 
     <div class="empty-state" v-else>
-      <van-empty description="视频生成失败或已过期" />
-      <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">处理失败，请重试</div>
-      <van-button round type="primary" @click="router.push('/create')">
+      <van-empty image="error" description="视频生成遇到问题" />
+      <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">请检查网络或稍后重试</div>
+      <van-button round type="primary" class="retry-btn" @click="router.push('/create')">
         返回首页
       </van-button>
     </div>
@@ -154,6 +168,10 @@ const shareVideo = () => {
   flex-direction: column;
 }
 
+.transparent-nav {
+  background: transparent;
+}
+
 .result-container {
   flex: 1;
   display: flex;
@@ -162,45 +180,94 @@ const shareVideo = () => {
 
 .video-wrapper {
   width: 100%;
-  aspect-ratio: 9/16;
+  /* aspect-ratio: 9/16; removed to let video decide height but max-height constrained */
+  max-height: 60vh;
   background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
 
 .result-video {
   width: 100%;
   height: 100%;
+  max-height: 60vh;
   object-fit: contain;
 }
 
-.success-tips {
-  padding: 32px 16px;
+.success-card {
+  padding: 24px 16px;
   text-align: center;
+  background: #fff;
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  margin-top: -20px;
+  position: relative;
+  z-index: 10;
 }
 
-.success-tips .title {
+.success-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  background: #07c160;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+  box-shadow: 0 4px 12px rgba(7, 193, 96, 0.3);
+}
+
+.success-card .title {
   font-size: 20px;
-  font-weight: bold;
-  margin-top: 16px;
+  font-weight: 700;
   color: #323233;
+  margin-bottom: 8px;
 }
 
-.success-tips .desc {
+.success-card .desc {
   font-size: 14px;
   color: #969799;
-  margin-top: 8px;
+  line-height: 1.6;
+}
+
+.success-card .highlight {
+  color: #1989fa;
+  font-weight: 500;
 }
 
 .action-buttons {
-  padding: 16px 32px;
+  padding: 0 32px 48px;
   margin-top: auto;
-  padding-bottom: 48px;
 }
 
 .mb-16 {
   margin-bottom: 16px;
+}
+
+.main-btn {
+  height: 48px;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(25, 137, 250, 0.3);
+}
+
+.btn-icon {
+  margin-right: 4px;
+  font-size: 18px;
+}
+
+.secondary-actions {
+  text-align: center;
+  margin-top: 16px;
+  font-size: 14px;
+  color: #969799;
+}
+
+.secondary-actions span {
+  cursor: pointer;
+  padding: 8px;
 }
 
 .loading-state {
@@ -209,17 +276,41 @@ const shareVideo = () => {
   align-items: center;
   justify-content: center;
   height: 100vh;
+  background: #f7f8fa;
 }
 
-.loading-desc {
+.loading-content {
+  background: #fff;
+  padding: 40px;
+  border-radius: 16px;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+  width: 80%;
+}
+
+.loading-text {
   margin-top: 16px;
-  color: #969799;
-  font-size: 14px;
+  font-size: 16px;
+  color: #323233;
+  font-weight: 500;
 }
 
-.error-text {
-  color: #ee0a24;
-  margin: 10px 0;
+.loading-steps {
+  margin-top: 24px;
+  text-align: left;
+  padding-left: 20px;
+}
+
+.step {
+  font-size: 13px;
+  color: #c8c9cc;
+  margin-bottom: 8px;
+  transition: all 0.3s;
+}
+
+.step.active {
+  color: #1989fa;
+  font-weight: 500;
 }
 
 .empty-state {
@@ -228,5 +319,11 @@ const shareVideo = () => {
   align-items: center;
   justify-content: center;
   height: 100vh;
+  background: #fff;
+}
+
+.retry-btn {
+  width: 120px;
+  margin-top: 24px;
 }
 </style>

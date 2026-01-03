@@ -38,7 +38,7 @@ if api_key:
 def api_request(method, path, **kwargs):
     headers = kwargs.pop("headers", {})
     headers = dict(headers)
-    request_id = headers.get("X-Request-Id") or str(uuid.uuid4())
+    request_id = headers.get("X-Request-Id")
     headers["X-Request-Id"] = request_id
     if not path.startswith("/"):
         path = f"/{path}"

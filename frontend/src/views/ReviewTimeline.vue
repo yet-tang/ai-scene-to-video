@@ -2,94 +2,129 @@
   <div class="review-timeline">
     <van-nav-bar
       title="智能分段确认"
-      left-text="返回"
       left-arrow
+      fixed
+      placeholder
       @click-left="router.back()"
     />
 
-    <!-- 头部信息 -->
-    <div class="header-info">
-      <div class="info-item">
-        <span class="label">总时长:</span>
-        <span class="value">{{ totalDuration }}</span>
+    <!-- 概览信息 -->
+    <div class="overview-card">
+      <div class="stat-item">
+        <div class="value">{{ assets.length }}</div>
+        <div class="label">片段数</div>
       </div>
-      <div class="info-item">
-        <span class="label">风格:</span>
-        <span class="value">标准·专业顾问</span>
+      <div class="divider"></div>
+      <div class="stat-item">
+        <div class="value">{{ totalDuration }}</div>
+        <div class="label">总时长</div>
+      </div>
+      <div class="divider"></div>
+      <div class="stat-item">
+        <div class="value">专业顾问</div>
+        <div class="label">解说风格</div>
       </div>
     </div>
 
     <!-- 拖拽列表 -->
     <div class="timeline-list">
-      <div class="list-title">请确认 AI 识别的顺序与内容:</div>
+      <div class="section-header">
+        <span class="title">视频片段排序</span>
+        <span class="sub">长按拖拽调整顺序</span>
+      </div>
       
       <draggable 
         v-model="assets" 
         item-key="id"
         handle=".drag-handle"
         @end="onDragEnd"
+        animation="200"
+        ghost-class="ghost-item"
       >
         <template #item="{ element, index }">
           <div class="timeline-item">
-            <div class="item-header">
-              <span class="index">{{ index + 1 }}</span>
-              <span class="time-range">{{ formatTimeRange(index) }}</span>
-              <van-icon name="cross" class="delete-btn" @click="removeAsset(index)" />
+            <div class="index-badge">{{ index + 1 }}</div>
+            
+            <div class="thumbnail-wrapper">
+              <video :src="element.url" muted class="video-preview"></video>
+              <div class="duration-badge">{{ Math.round(element.duration) }}s</div>
             </div>
             
             <div class="item-content">
-              <!-- 视频预览 (使用 video 标签展示第一帧，或者只是个图标) -->
-              <div class="thumbnail">
-                <video :src="element.url" muted preload="metadata" class="video-preview"></video>
-                <div class="play-icon"><van-icon name="play-circle-o" /></div>
+              <div class="scene-info" @click="openScenePicker(index)">
+                <div class="scene-label">
+                  {{ element.userLabel || '未知场景' }}
+                  <van-icon name="edit" class="edit-icon" />
+                </div>
+                <div class="ai-confidence" v-if="element.sceneLabel">
+                  AI识别: {{ element.sceneLabel }}
+                </div>
               </div>
               
-              <div class="details">
-                <div class="scene-row" @click="openScenePicker(index)">
-                  <span class="label">识别场景:</span>
-                  <span class="scene-tag">{{ element.userLabel }} <van-icon name="edit" /></span>
-                </div>
-                <div class="desc-row">
-                  <span class="label">时长:</span>
-                  <span>{{ Math.round(element.duration) }}s</span>
-                </div>
+              <div class="time-range">
+                {{ formatTimeRange(index) }}
               </div>
+            </div>
 
+            <div class="actions">
               <div class="drag-handle">
-                <van-icon name="wap-nav" size="20" />
+                <van-icon name="bars" size="20" color="#c8c9cc" />
+              </div>
+              <div class="delete-btn" @click.stop="removeAsset(index)">
+                <van-icon name="delete-o" size="16" color="#969799" />
               </div>
             </div>
           </div>
         </template>
       </draggable>
 
-      <div class="add-btn" @click="showToast('添加功能开发中')">
+      <div class="add-clip-btn" @click="showToast('添加功能开发中')">
         <van-icon name="plus" /> 添加遗漏片段
       </div>
     </div>
 
     <!-- 脚本预览 -->
-    <div class="script-preview">
-      <div class="section-title-row">
-        <div class="section-title">预览解说词全文:</div>
-        <van-button size="small" type="primary" plain @click="onGenerateScript" :loading="isScriptGenerating">
-          生成 AI 解说词
+    <div class="script-section">
+      <div class="section-header">
+        <span class="title">AI 解说文案</span>
+        <van-button 
+          size="mini" 
+          type="primary" 
+          plain 
+          hairline
+          @click="onGenerateScript" 
+          :loading="isScriptGenerating"
+        >
+          重新生成
         </van-button>
       </div>
-      <van-field
-        v-model="scriptContent"
-        type="textarea"
-        rows="6"
-        autosize
-        border
-        class="script-input"
-        placeholder="点击上方按钮生成，或直接输入..."
-      />
+      
+      <div class="script-card">
+        <van-field
+          v-model="scriptContent"
+          type="textarea"
+          rows="6"
+          autosize
+          :placeholder="isScriptGenerating ? '正在思考文案...' : '点击上方按钮生成，或直接输入...'"
+          class="script-input"
+        />
+      </div>
     </div>
 
     <!-- 底部按钮 -->
-    <div class="bottom-action">
-      <van-button round block type="primary" @click="onGenerateVideo" :loading="isRendering">
+    <div class="bottom-action-bar">
+      <div class="action-summary">
+        预计生成时长: {{ Math.ceil(assets.reduce((s, i) => s + i.duration, 0) / 60 * 2) }} 分钟
+      </div>
+      <van-button 
+        round 
+        block 
+        type="primary" 
+        @click="onGenerateVideo" 
+        :loading="isRendering"
+        color="linear-gradient(to right, #1989fa, #39b9f5)"
+        loading-text="正在合成..."
+      >
         生成最终视频
       </van-button>
     </div>
@@ -97,6 +132,7 @@
     <!-- 场景修改弹窗 -->
     <van-popup v-model:show="showPicker" position="bottom" round>
       <van-picker
+        title="修正场景标签"
         :columns="sceneOptions"
         @confirm="onSceneConfirm"
         @cancel="showPicker = false"
@@ -138,6 +174,8 @@ const sceneOptions = [
   { text: '卫生间', value: '卫生间' },
   { text: '阳台', value: '阳台' },
   { text: '书房', value: '书房' },
+  { text: '走廊', value: '走廊' },
+  { text: '其他', value: '其他' },
 ]
 
 onMounted(async () => {
@@ -319,45 +357,66 @@ const onGenerateVideo = async () => {
 </script>
 
 <style scoped>
-.section-title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
 .review-timeline {
-  padding-bottom: 80px;
+  padding-bottom: 120px;
   background-color: #f7f8fa;
   min-height: 100vh;
 }
 
-.header-info {
-  display: flex;
-  justify-content: space-between;
-  padding: 12px 16px;
+.overview-card {
+  margin: 12px 16px;
   background: #fff;
-  margin-bottom: 12px;
-  font-size: 14px;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
 }
 
-.header-info .label {
-  color: #646566;
-  margin-right: 4px;
+.stat-item {
+  flex: 1;
+  text-align: center;
 }
 
-.header-info .value {
-  font-weight: bold;
+.stat-item .value {
+  font-size: 16px;
+  font-weight: 600;
   color: #323233;
+}
+
+.stat-item .label {
+  font-size: 12px;
+  color: #969799;
+  margin-top: 4px;
+}
+
+.divider {
+  width: 1px;
+  height: 24px;
+  background: #ebedf0;
 }
 
 .timeline-list {
   padding: 0 16px;
 }
 
-.list-title {
-  font-size: 14px;
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.section-header .title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323233;
+}
+
+.section-header .sub {
+  font-size: 12px;
   color: #969799;
-  margin-bottom: 8px;
 }
 
 .timeline-item {
@@ -365,39 +424,44 @@ const onGenerateVideo = async () => {
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  display: flex;
+  align-items: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  position: relative;
+  transition: all 0.2s;
 }
 
-.item-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+.ghost-item {
+  opacity: 0.5;
+  background: #e8f3ff;
+}
+
+.index-badge {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  width: 20px;
+  height: 20px;
+  background: #323233;
+  color: #fff;
+  border-radius: 50%;
   font-size: 12px;
-  color: #969799;
-}
-
-.item-header .index {
-  background: #ebedf0;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #323233;
-  margin-right: 8px;
-}
-
-.item-content {
   display: flex;
   align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
-.thumbnail {
-  width: 80px;
-  height: 80px;
-  border-radius: 4px;
+.thumbnail-wrapper {
+  width: 72px;
+  height: 96px; /* 3:4 */
+  border-radius: 6px;
   overflow: hidden;
   position: relative;
   background: #000;
   margin-right: 12px;
+  flex-shrink: 0;
 }
 
 .video-preview {
@@ -406,80 +470,121 @@ const onGenerateVideo = async () => {
   object-fit: cover;
 }
 
-.play-icon {
+.duration-badge {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: rgba(255,255,255,0.8);
-  font-size: 24px;
+  bottom: 0;
+  right: 0;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-top-left-radius: 4px;
 }
 
-.details {
+.item-content {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.scene-row {
-  margin-bottom: 4px;
+.scene-info {
+  margin-bottom: 6px;
+}
+
+.scene-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323233;
   display: flex;
   align-items: center;
 }
 
-.scene-tag {
-  color: #1989fa;
-  font-weight: 500;
+.edit-icon {
+  font-size: 14px;
+  color: #969799;
   margin-left: 4px;
-  display: flex;
-  align-items: center;
+  opacity: 0.5;
 }
 
-.desc-row {
+.ai-confidence {
+  font-size: 11px;
+  color: #1989fa;
+  margin-top: 2px;
+  background: #e8f3ff;
+  display: inline-block;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.time-range {
   font-size: 12px;
-  color: #646566;
+  color: #969799;
+  font-family: monospace;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 96px;
+  padding-left: 8px;
 }
 
 .drag-handle {
-  padding: 8px;
-  color: #c8c9cc;
+  padding: 8px 4px;
   cursor: grab;
 }
 
-.add-btn {
+.delete-btn {
+  padding: 8px 4px;
+}
+
+.add-clip-btn {
   text-align: center;
-  padding: 12px;
+  padding: 14px;
   background: #fff;
   border-radius: 8px;
   border: 1px dashed #dcdee0;
   color: #1989fa;
   font-size: 14px;
-  margin-top: 12px;
+  margin-top: 8px;
+  font-weight: 500;
 }
 
-.script-preview {
+.script-section {
   margin-top: 24px;
   padding: 0 16px;
 }
 
-.section-title {
-  font-size: 14px;
-  color: #323233;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.script-input {
-  border-radius: 8px;
+.script-card {
   background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
 }
 
-.bottom-action {
+.script-input :deep(.van-field__control) {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #323233;
+}
+
+.bottom-action-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 12px 16px;
+  padding: 12px 16px 24px;
   background: #fff;
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
   z-index: 100;
+}
+
+.action-summary {
+  text-align: center;
+  font-size: 12px;
+  color: #969799;
+  margin-bottom: 8px;
 }
 </style>
