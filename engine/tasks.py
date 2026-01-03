@@ -309,14 +309,43 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                             )
                             temp_clip.close()
                             try:
-                                clip.write_videofile(
-                                    temp_clip.name,
-                                    codec="libx264",
-                                    audio_codec="aac",
-                                    preset="veryfast",
-                                    threads=2,
-                                    logger=None,
-                                )
+                                try:
+                                    clip.write_videofile(
+                                        temp_clip.name,
+                                        codec="libx264",
+                                        audio_codec="aac",
+                                        preset="veryfast",
+                                        threads=2,
+                                        logger=None,
+                                    )
+                                except Exception as e:
+                                    if (
+                                        isinstance(e, AttributeError)
+                                        and "stdout" in str(e)
+                                        and "NoneType" in str(e)
+                                    ):
+                                        _log_info(
+                                            "split.segment.fallback_no_audio",
+                                            project_id=project_id,
+                                            asset_id=asset_id,
+                                            start_sec=float(seg["start_sec"]),
+                                            end_sec=float(seg["end_sec"]),
+                                        )
+                                        try:
+                                            if os.path.exists(temp_clip.name):
+                                                os.remove(temp_clip.name)
+                                        except Exception:
+                                            pass
+                                        clip.write_videofile(
+                                            temp_clip.name,
+                                            codec="libx264",
+                                            audio=False,
+                                            preset="veryfast",
+                                            threads=2,
+                                            logger=None,
+                                        )
+                                    else:
+                                        raise
                                 object_key = (
                                     f"clips/{project_id}/{uuid.uuid4()}.mp4"
                                 )
@@ -324,10 +353,6 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                             finally:
                                 try:
                                     os.remove(temp_clip.name)
-                                except Exception:
-                                    pass
-                                try:
-                                    clip.close()
                                 except Exception:
                                     pass
 

@@ -41,24 +41,37 @@
       >
         <template #item="{ element, index }">
           <div class="timeline-item">
+            <!-- 1. 视频单独一行，可预览 -->
             <div class="thumbnail-wrapper">
               <div class="index-badge">{{ index + 1 }}</div>
-              <video :src="element.url" muted class="video-preview"></video>
+              <video 
+                :src="element.url" 
+                controls 
+                class="video-preview"
+                preload="metadata"
+              ></video>
               <div class="duration-badge">{{ Math.round(element.duration) }}s</div>
             </div>
             
+            <!-- 2. 其他内容下铺 -->
             <div class="item-content">
               <div class="content-top">
                 <div class="scene-info" @click="openScenePicker(index)">
                   <span class="scene-label">{{ element.userLabel || '未知场景' }}</span>
                   <van-icon name="edit" class="edit-icon" />
                 </div>
-                <div class="delete-btn" @click.stop="removeAsset(index)">
-                  <van-icon name="delete-o" size="18" color="#c8c9cc" />
+                
+                <div class="actions">
+                    <div class="delete-btn" @click.stop="removeAsset(index)">
+                        <van-icon name="delete-o" size="18" color="#c8c9cc" />
+                    </div>
+                    <div class="drag-handle">
+                        <van-icon name="bars" size="20" color="#c8c9cc" />
+                    </div>
                 </div>
               </div>
               
-              <div class="content-bottom">
+              <div class="content-middle">
                 <div class="ai-tag" v-if="element.sceneLabel">
                   AI: {{ element.sceneLabel }}
                 </div>
@@ -66,10 +79,18 @@
                   {{ formatTimeRange(index) }}
                 </div>
               </div>
-            </div>
 
-            <div class="drag-handle">
-              <van-icon name="bars" size="20" color="#c8c9cc" />
+              <!-- 3. 每段切片都有脚本，可修改 -->
+              <div class="script-box">
+                <van-field
+                    v-model="element.script"
+                    rows="2"
+                    autosize
+                    type="textarea"
+                    placeholder="输入该片段的解说词..."
+                    class="clip-script-input"
+                />
+              </div>
             </div>
           </div>
         </template>
@@ -80,50 +101,34 @@
       </div>
     </div>
 
-    <!-- 脚本预览 -->
-    <div class="script-section">
-      <div class="section-header">
-        <span class="title">AI 解说文案</span>
-        <van-button 
-          size="mini" 
-          type="primary" 
-          plain 
-          hairline
-          @click="onGenerateScript" 
-          :loading="isScriptGenerating"
-        >
-          重新生成
-        </van-button>
-      </div>
-      
-      <div class="script-card">
-        <van-field
-          v-model="scriptContent"
-          type="textarea"
-          rows="6"
-          autosize
-          :placeholder="isScriptGenerating ? '正在思考文案...' : '点击上方按钮生成，或直接输入...'"
-          class="script-input"
-        />
-      </div>
-    </div>
-
     <!-- 底部按钮 -->
     <div class="bottom-action-bar">
       <div class="action-summary">
         预计生成时长: {{ Math.ceil(assets.reduce((s, i) => s + i.duration, 0) / 60 * 2) }} 分钟
       </div>
-      <van-button 
-        round 
-        block 
-        type="primary" 
-        @click="onGenerateVideo" 
-        :loading="isRendering"
-        color="linear-gradient(to right, #1989fa, #39b9f5)"
-        loading-text="正在合成..."
-      >
-        生成最终视频
-      </van-button>
+      
+      <div class="button-group">
+          <van-button 
+            plain
+            type="primary" 
+            @click="onGenerateScript" 
+            :loading="isScriptGenerating"
+            class="action-btn"
+          >
+            AI 生成解说
+          </van-button>
+          
+          <van-button 
+            type="primary" 
+            @click="onGenerateVideo" 
+            :loading="isRendering"
+            color="linear-gradient(to right, #1989fa, #39b9f5)"
+            loading-text="正在合成..."
+            class="action-btn main-btn"
+          >
+            生成最终视频
+          </van-button>
+      </div>
     </div>
 
     <!-- 场景修改弹窗 -->
@@ -146,13 +151,17 @@ import { projectApi } from '../api/project'
 import draggable from 'vuedraggable'
 import { showToast } from 'vant'
 
+// Extend Asset type locally to include script
+interface UIAsset extends Asset {
+    script: string
+}
+
 const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
 const projectId = route.params.id as string
 
-const assets = ref<Asset[]>([])
-const scriptContent = ref('')
+const assets = ref<UIAsset[]>([])
 const isScriptGenerating = ref(false)
 const isRendering = ref(false)
 let pollTimer: any = null
@@ -196,44 +205,90 @@ const loadData = async () => {
     await projectStore.fetchProject(projectId)
     await projectStore.fetchTimeline(projectId)
     
-    assets.value = [...projectStore.currentProject.assets]
-    if (projectStore.currentProject.script) {
-        scriptContent.value = projectStore.currentProject.script
-    }
+    // Initial Load
+    const storeAssets = projectStore.currentProject.assets
+    const globalScript = projectStore.currentProject.script || ''
+    
+    // Distribute script if this is first load and assets have no script
+    const distributedScripts = distributeScript(globalScript, storeAssets.length)
+    
+    assets.value = storeAssets.map((a, i) => ({
+        ...a,
+        script: distributedScripts[i] || ''
+    }))
+
   } catch (e) {
     showToast('加载失败')
   }
 }
 
+// Simple heuristic to split script into N parts
+const distributeScript = (text: string, count: number): string[] => {
+    if (!text) return new Array(count).fill('')
+    
+    // Try to split by common punctuation
+    // Match sentences ending with punctuation
+    const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
+    
+    if (sentences.length <= count) {
+        // If fewer sentences than clips, fill 1:1 then empty
+        const res = new Array(count).fill('')
+        sentences.forEach((s, i) => res[i] = s)
+        return res
+    } else {
+        // If more sentences than clips, combine them roughly evenly
+        const res = new Array(count).fill('')
+        const perClip = Math.ceil(sentences.length / count)
+        for (let i = 0; i < count; i++) {
+            res[i] = sentences.slice(i * perClip, (i + 1) * perClip).join('')
+        }
+        return res
+    }
+}
+
 const startPolling = () => {
   stopPolling()
   pollTimer = setInterval(async () => {
-    // Poll until all assets have scene labels (analysis done)
     await projectStore.fetchTimeline(projectId)
     const newAssets = projectStore.currentProject.assets
-    if (newAssets.length !== assets.value.length) {
-      assets.value = [...newAssets]
-    }
     
-    // Only update if we are not dragging? 
-    // Updating list while dragging causes issues.
-    // For MVP, we simply update if length changed or status changed.
-    // Better: only update missing labels.
+    // Merge logic to preserve local script edits
+    // Assume ID match
     let hasUpdate = false
-    newAssets.forEach((newAsset, idx) => {
-        const current = assets.value.find(a => a.id === newAsset.id)
-        if (current) {
-            if (!current.sceneLabel && newAsset.sceneLabel) {
-                current.sceneLabel = newAsset.sceneLabel
-                current.userLabel = newAsset.userLabel
-                current.sceneScore = newAsset.sceneScore
+    const mergedAssets: UIAsset[] = []
+    
+    // We map newAssets to ensure order from backend (or should we trust local order?)
+    // If we are dragging, we might have local order diff from backend.
+    // But this poll is for "AI Analysis Status".
+    // Strategy: Map over current local assets, update their status from newAssets.
+    // If newAssets has new items (unlikely unless AI found more), add them.
+    
+    // Simplification: Re-build assets list but keep script from old list
+    newAssets.forEach(newA => {
+        const oldA = assets.value.find(a => a.id === newA.id)
+        if (oldA) {
+            // Check for updates
+            if (!oldA.sceneLabel && newA.sceneLabel) {
                 hasUpdate = true
             }
+            mergedAssets.push({
+                ...newA,
+                script: oldA.script // Preserve script
+            })
+        } else {
+            // New asset found
+            mergedAssets.push({
+                ...newA,
+                script: ''
+            })
+            hasUpdate = true
         }
     })
     
-    if (hasUpdate) {
-        showToast('AI 分析已更新')
+    // Only update if length changed or we found updates, to avoid re-rendering too much
+    if (hasUpdate || newAssets.length !== assets.value.length) {
+         assets.value = mergedAssets
+         if (hasUpdate) showToast('AI 分析已更新')
     }
 
     if (!analysisDone.value) {
@@ -245,11 +300,17 @@ const startPolling = () => {
       }
     }
     
-    // Also check script status if we are waiting for it
+    // Check script generation status
     if (isScriptGenerating.value) {
         await projectStore.fetchProject(projectId)
         if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
-            scriptContent.value = projectStore.currentProject.script
+            const fullScript = projectStore.currentProject.script
+            // Distribute new script
+            const parts = distributeScript(fullScript, assets.value.length)
+            assets.value.forEach((a, i) => {
+                if (parts[i]) a.script = parts[i]
+            })
+            
             isScriptGenerating.value = false
             showToast('脚本生成完成')
         }
@@ -288,17 +349,13 @@ const formatTimeRange = (index: number) => {
 }
 
 const onDragEnd = async () => {
-  // Update Sort Order
-  // We need to update ALL assets sort order in backend?
-  // Or just the moved one?
-  // Backend relies on sort_order. We should update all to be safe (0, 1, 2...)
   const updates = assets.value.map((asset, index) => {
     return projectApi.updateAsset(projectId, asset.id, { sortOrder: index })
   })
   
   try {
     await Promise.all(updates)
-    // Sync store
+    // Sync store (need to cast back to Asset)
     projectStore.currentProject.assets = assets.value
   } catch (e) {
     showToast('排序保存失败')
@@ -306,11 +363,6 @@ const onDragEnd = async () => {
 }
 
 const removeAsset = (index: number) => {
-  // Backend doesn't support delete asset yet?
-  // We can just hide it locally or add delete API.
-  // For MVP, just remove from local list (won't be included in script if we regenerate?)
-  // Actually generateScript reads from DB. So we MUST delete from DB or mark ignored.
-  // Missing backend API for delete.
   showToast('暂不支持删除片段')
 }
 
@@ -346,15 +398,18 @@ const onGenerateScript = async () => {
 }
 
 const onGenerateVideo = async () => {
-  if (!scriptContent.value) {
+  // Combine scripts
+  const combinedScript = assets.value.map(a => a.script).join('\n')
+  
+  if (!combinedScript.trim()) {
     showToast('请先生成或填写解说词')
     return
   }
   
   isRendering.value = true
   try {
-      // 1. Generate Audio
-      await projectApi.generateAudio(projectId, scriptContent.value)
+      // 1. Generate Audio with combined script
+      await projectApi.generateAudio(projectId, combinedScript)
       // 2. Render Video
       await projectApi.renderVideo(projectId)
       
@@ -401,14 +456,16 @@ const onGenerateVideo = async () => {
   margin-top: 4px;
 }
 
+/* 4. Remove huge margins -> padding: 0 */
 .timeline-list {
-  padding: 0 16px;
+  padding: 0;
 }
 
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 0 16px;
   margin-bottom: 12px;
 }
 
@@ -425,11 +482,9 @@ const onGenerateVideo = async () => {
 
 .timeline-item {
   background: #fff;
-  border-radius: 8px;
-  padding: 12px;
   margin-bottom: 12px;
   display: flex;
-  align-items: stretch;
+  flex-direction: column; /* Video on separate line */
   box-shadow: 0 2px 4px rgba(0,0,0,0.02);
   position: relative;
   transition: all 0.2s;
@@ -440,70 +495,68 @@ const onGenerateVideo = async () => {
   background: #e8f3ff;
 }
 
-.index-badge {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 18px;
-  height: 18px;
-  background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(2px);
-  color: #fff;
-  border-radius: 4px;
-  font-size: 11px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-}
-
 .thumbnail-wrapper {
-  width: 72px;
-  height: 96px; /* 3:4 */
-  border-radius: 6px;
-  overflow: hidden;
-  position: relative;
+  width: 100%;
+  aspect-ratio: 16/9; /* Full width preview */
   background: #000;
-  margin-right: 12px;
-  flex-shrink: 0;
+  position: relative;
 }
 
 .video-preview {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  background: #000;
+}
+
+.index-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 24px;
+  height: 24px;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(2px);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  pointer-events: none;
 }
 
 .duration-badge {
   position: absolute;
-  bottom: 0;
-  right: 0;
+  bottom: 8px;
+  right: 8px;
   background: rgba(0,0,0,0.6);
   color: #fff;
-  font-size: 10px;
-  padding: 2px 4px;
-  border-top-left-radius: 4px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 .item-content {
-  flex: 1;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 4px 0;
+  gap: 8px;
 }
 
 .content-top {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
 }
 
-.content-bottom {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+.content-middle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
 }
 
 .scene-info {
@@ -512,20 +565,25 @@ const onGenerateVideo = async () => {
 }
 
 .scene-label {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: #323233;
 }
 
 .edit-icon {
-  font-size: 14px;
-  color: #969799;
-  margin-left: 4px;
-  opacity: 0.5;
+  font-size: 16px;
+  color: #1989fa;
+  margin-left: 6px;
+}
+
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
 }
 
 .ai-tag {
-  font-size: 10px;
+  font-size: 11px;
   color: #1989fa;
   background: #e8f3ff;
   padding: 2px 6px;
@@ -539,47 +597,39 @@ const onGenerateVideo = async () => {
   font-family: monospace;
 }
 
+.script-box {
+    margin-top: 4px;
+}
+
+.clip-script-input {
+    background: #f7f8fa;
+    border-radius: 4px;
+    padding: 8px;
+}
+
+.clip-script-input :deep(.van-field__control) {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
 .drag-handle {
-  display: flex;
-  align-items: center;
-  padding: 0 4px 0 12px;
   cursor: grab;
+  padding: 4px;
 }
 
 .delete-btn {
   padding: 4px;
-  margin-top: -4px;
-  margin-right: -4px;
 }
 
 .add-clip-btn {
   text-align: center;
-  padding: 14px;
+  padding: 16px;
   background: #fff;
-  border-radius: 8px;
-  border: 1px dashed #dcdee0;
   color: #1989fa;
   font-size: 14px;
-  margin-top: 8px;
   font-weight: 500;
-}
-
-.script-section {
-  margin-top: 24px;
-  padding: 0 16px;
-}
-
-.script-card {
-  background: #fff;
+  margin: 16px;
   border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-}
-
-.script-input :deep(.van-field__control) {
-  font-size: 14px;
-  line-height: 1.6;
-  color: #323233;
 }
 
 .bottom-action-bar {
@@ -598,6 +648,19 @@ const onGenerateVideo = async () => {
   text-align: center;
   font-size: 12px;
   color: #969799;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.button-group {
+    display: flex;
+    gap: 12px;
+}
+
+.action-btn {
+    flex: 1;
+}
+
+.main-btn {
+    flex: 2;
 }
 </style>
