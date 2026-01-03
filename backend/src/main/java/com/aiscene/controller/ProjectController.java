@@ -1,11 +1,14 @@
 package com.aiscene.controller;
 
+import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.CreateProjectRequest;
+import com.aiscene.dto.PresignedUrlResponse;
 import com.aiscene.dto.TimelineResponse;
 import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.service.ProjectService;
+import com.aiscene.service.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +22,7 @@ import java.util.UUID;
 public class ProjectController {
 
     private final ProjectService projectService;
+    private final StorageService storageService;
 
     @PostMapping
     public ResponseEntity<Project> createProject(@RequestBody CreateProjectRequest request) {
@@ -30,6 +34,22 @@ public class ProjectController {
     public ResponseEntity<Project> getProject(@PathVariable UUID id) {
         Project project = projectService.getProject(id);
         return ResponseEntity.ok(project);
+    }
+
+    @PostMapping("/{id}/assets/presign")
+    public ResponseEntity<PresignedUrlResponse> getPresignedUrl(
+            @PathVariable UUID id,
+            @RequestParam String filename,
+            @RequestParam String contentType) {
+        String objectKey = UUID.randomUUID() + "-" + filename;
+        PresignedUrlResponse response = storageService.generatePresignedUrl(objectKey, contentType);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{id}/assets/confirm")
+    public ResponseEntity<Asset> confirmAsset(@PathVariable UUID id, @RequestBody AssetConfirmRequest request) {
+        Asset asset = projectService.confirmAsset(id, request);
+        return ResponseEntity.ok(asset);
     }
 
     @PostMapping("/{id}/assets")

@@ -1,5 +1,6 @@
 package com.aiscene.service;
 
+import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.CreateProjectRequest;
 import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
@@ -35,6 +36,35 @@ public class ProjectService {
     private final ObjectMapper objectMapper;
 
     // ... existing methods ...
+
+    @Transactional
+    public Asset confirmAsset(UUID projectId, AssetConfirmRequest request) {
+        Project project = getProject(projectId);
+
+        // Update status to UPLOADING if it's DRAFT
+        if (project.getStatus() == ProjectStatus.DRAFT) {
+            project.setStatus(ProjectStatus.UPLOADING);
+            projectRepository.save(project);
+        }
+
+        // Construct public URL
+        String ossUrl = storageService.getPublicUrl(request.getObjectKey());
+
+        Asset asset = Asset.builder()
+                .project(project)
+                .ossUrl(ossUrl)
+                // Duration will be extracted by Python worker later
+                .duration(0.0)
+                .sortOrder(0)
+                .build();
+
+        Asset savedAsset = assetRepository.save(asset);
+
+        // Submit Analysis Task
+        taskQueueService.submitAnalysisTask(project.getId(), savedAsset.getId(), savedAsset.getOssUrl());
+
+        return savedAsset;
+    }
 
     public TimelineResponse getSmartTimeline(UUID projectId) {
         Project project = getProject(projectId);

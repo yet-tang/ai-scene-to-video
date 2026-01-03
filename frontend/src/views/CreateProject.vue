@@ -160,6 +160,7 @@ import { useRouter } from 'vue-router'
 import { useProjectStore, type ProjectInfo } from '../stores/project'
 import { projectApi } from '../api/project'
 import { showToast } from 'vant'
+import axios from 'axios'
 
 const router = useRouter()
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -237,9 +238,48 @@ const onSubmit = async () => {
     const projectId = createRes.data.id
     console.log('Project created:', projectId)
 
-    // 2. 并发上传文件
-    const uploadPromises = fileList.value.map(fileItem => {
-      return projectApi.uploadAsset(projectId, fileItem.file)
+    // 2. 并发上传文件 (Presigned URL 模式)
+    const uploadPromises = fileList.value.map(async (fileItem) => {
+      try {
+        fileItem.status = 'uploading'
+        fileItem.message = '0%'
+
+        // Step 1: 获取 Presigned URL
+        const { data: presignData } = await projectApi.getPresignedUrl(
+          projectId, 
+          fileItem.file.name, 
+          fileItem.file.type
+        )
+
+        // Step 2: 直传 S3/R2
+        await axios.put(presignData.uploadUrl, fileItem.file, {
+          headers: {
+            'Content-Type': fileItem.file.type
+          },
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total) {
+              const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+              fileItem.message = `${percent}%`
+            }
+          }
+        })
+
+        // Step 3: 确认上传
+        await projectApi.confirmAsset(projectId, {
+          objectKey: presignData.objectKey,
+          filename: fileItem.file.name,
+          contentType: fileItem.file.type,
+          size: fileItem.file.size
+        })
+
+        fileItem.status = 'done'
+        fileItem.message = '完成'
+      } catch (err) {
+        console.error('Upload failed for file:', fileItem.file.name, err)
+        fileItem.status = 'failed'
+        fileItem.message = '失败'
+        throw err
+      }
     })
 
     await Promise.all(uploadPromises)
