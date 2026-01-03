@@ -6,7 +6,7 @@ import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
 import com.aiscene.repository.AssetRepository;
 import com.aiscene.repository.ProjectRepository;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -77,13 +77,7 @@ public class ProjectService {
         Project project = getProject(projectId);
         List<Asset> assets = assetRepository.findByProjectIdOrderBySortOrderAsc(projectId);
 
-        // Convert house info from JSON string to Object
-        Object houseInfo;
-        try {
-            houseInfo = objectMapper.readValue(project.getHouseInfo(), Object.class);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to parse house info", e);
-        }
+        Object houseInfo = objectMapper.convertValue(project.getHouseInfo(), Object.class);
 
         // Convert assets to simple list of maps/objects for Python
         List<Object> timelineData = assets.stream().map(asset -> {
@@ -151,12 +145,7 @@ public class ProjectService {
 
     @Transactional
     public Project createProject(CreateProjectRequest request) {
-        String houseInfoJson;
-        try {
-            houseInfoJson = objectMapper.writeValueAsString(request.getHouseInfo());
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Invalid house info format", e);
-        }
+        JsonNode houseInfoJson = objectMapper.valueToTree(request.getHouseInfo());
 
         Project project = Project.builder()
                 .userId(request.getUserId())

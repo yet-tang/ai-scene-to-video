@@ -1,11 +1,14 @@
 package com.aiscene.entity;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -30,7 +33,8 @@ public class Project {
     // Storing JSON as String for simplicity in MVP. 
     // In production, consider using a proper JSON Type with Hypersistence Utils.
     @Column(name = "house_info", columnDefinition = "jsonb")
-    private String houseInfo;
+    @JdbcTypeCode(SqlTypes.JSON)
+    private JsonNode houseInfo;
 
     @Enumerated(EnumType.STRING)
     private ProjectStatus status;

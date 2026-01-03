@@ -1,7 +1,6 @@
 import requests
 import time
 import sys
-import json
 import os
 import argparse
 import uuid
@@ -17,10 +16,6 @@ parser.add_argument(
     "--projects-path",
     default=os.getenv("AI_VIDEO_PROJECTS_PATH") or "/api/ai-video/v1/projects",
 )
-parser.add_argument(
-    "--no-auto-detect",
-    action="store_true",
-)
 args = parser.parse_args()
 
 BASE_URL = args.base_url.rstrip("/")
@@ -35,15 +30,21 @@ session = requests.Session()
 if api_key:
     auth_value = api_key if api_key.startswith("ApiKey ") else f"ApiKey {api_key}"
     session.headers.update({"Authorization": auth_value})
-    session.headers.update({"X-Api-Key": api_key})
 
 def api_request(method, path, **kwargs):
     headers = kwargs.pop("headers", {})
     headers = dict(headers)
-    headers.setdefault("X-Request-Id", str(uuid.uuid4()))
+    request_id = headers.get("X-Request-Id") or str(uuid.uuid4())
+    headers["X-Request-Id"] = request_id
     if not path.startswith("/"):
         path = f"/{path}"
-    return session.request(method, f"{BASE_URL}{path}", headers=headers, **kwargs)
+    url = f"{BASE_URL}{path}"
+    print(f"X-Request-Id: {request_id} {method} {url}")
+    response = session.request(method, url, headers=headers, **kwargs)
+    response_request_id = response.headers.get("X-Request-Id")
+    if response_request_id and response_request_id != request_id:
+        print(f"X-Request-Id (response): {response_request_id}")
+    return response
 
 def check_status(response):
     if response.status_code not in [200, 201, 202]:
@@ -91,21 +92,7 @@ def main():
             "price": 500
         }
     }
-    global projects_path
-    create_candidates = [projects_path]
-    if not args.no_auto_detect:
-        if projects_path.startswith("/api/ai-video/"):
-            create_candidates.append(f"/api/ai-video{projects_path}")
-
-    res = None
-    for candidate in create_candidates:
-        attempt = api_request("POST", candidate, json=project_payload)
-        if attempt.status_code in [200, 201, 202]:
-            projects_path = candidate
-            res = attempt
-            break
-        res = attempt
-
+    res = api_request("POST", projects_path, json=project_payload)
     check_status(res)
     project_data = res.json()
     project_id = project_data.get("id")
