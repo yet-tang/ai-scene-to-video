@@ -86,13 +86,23 @@ export const useProjectStore = defineStore('project', () => {
   async function fetchTimeline(id: string) {
     try {
       const { data } = await projectApi.getTimeline(id)
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+      // VITE_API_BASE_URL is like "https://gw.tnight.xyz/api/ai-video"
+      // We need to extract the origin "https://gw.tnight.xyz"
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
+      let origin = ''
+      try {
+        origin = new URL(apiBaseUrl).origin
+      } catch (e) {
+        origin = '' // Fallback or handle relative paths
+      }
       
       currentProject.value.assets = data.assets.map((a: any) => {
         let url = a.ossUrl
         if (url && url.startsWith('file://')) {
             const filename = url.split('/').pop()
-            url = `${baseUrl.replace(/\/+$/, '')}/files/${filename}`
+            // Construct the Gateway Static Asset URL
+            // Pattern: Origin + /assets/ai-video/public/ + filename
+            url = `${origin}/assets/ai-video/public/${filename}`
         }
         
         return {
