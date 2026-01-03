@@ -62,6 +62,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
+        - VITE_API_KEY=${VITE_API_KEY}
     image: ai-scene-frontend:latest
     container_name: ai-scene-frontend
     ports:

@@ -4,6 +4,15 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+
+# Build args
+ARG VITE_API_BASE_URL
+ARG VITE_API_KEY
+
+# Set as env vars for build
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_API_KEY=$VITE_API_KEY
+
 # Build for production
 RUN npm run build
 
