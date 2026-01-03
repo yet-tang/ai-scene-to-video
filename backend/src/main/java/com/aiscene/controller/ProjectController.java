@@ -58,6 +58,12 @@ public class ProjectController {
         return ResponseEntity.ok(asset);
     }
 
+    @PostMapping("/{id}/assets/local")
+    public ResponseEntity<Asset> uploadAssetLocal(@PathVariable UUID id, @RequestParam("file") MultipartFile file) {
+        Asset asset = projectService.uploadAssetLocal(id, file);
+        return ResponseEntity.ok(asset);
+    }
+
     @PutMapping("/{projectId}/assets/{assetId}")
     public ResponseEntity<Asset> updateAsset(@PathVariable UUID projectId, @PathVariable UUID assetId, @RequestBody UpdateAssetRequest request) {
         // We currently don't check if assetId belongs to projectId in Service (assumes valid assetId),

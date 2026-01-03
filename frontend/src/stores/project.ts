@@ -86,15 +86,25 @@ export const useProjectStore = defineStore('project', () => {
   async function fetchTimeline(id: string) {
     try {
       const { data } = await projectApi.getTimeline(id)
-      currentProject.value.assets = data.assets.map((a: any) => ({
-        id: a.id,
-        url: a.ossUrl,
-        sceneLabel: a.sceneLabel,
-        userLabel: a.userLabel || a.sceneLabel,
-        duration: a.duration || 0,
-        sortOrder: a.sortOrder,
-        sceneScore: a.sceneScore
-      }))
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+      
+      currentProject.value.assets = data.assets.map((a: any) => {
+        let url = a.ossUrl
+        if (url && url.startsWith('file://')) {
+            const filename = url.split('/').pop()
+            url = `${baseUrl.replace(/\/+$/, '')}/files/${filename}`
+        }
+        
+        return {
+            id: a.id,
+            url: url,
+            sceneLabel: a.sceneLabel,
+            userLabel: a.userLabel || a.sceneLabel,
+            duration: a.duration || 0,
+            sortOrder: a.sortOrder,
+            sceneScore: a.sceneScore
+        }
+      })
       if (data.scriptContent) {
         currentProject.value.script = data.scriptContent
       }

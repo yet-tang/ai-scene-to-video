@@ -58,6 +58,16 @@ export const projectApi = {
     })
   },
 
+  uploadAssetLocal: (projectId: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return client.post(`/v1/projects/${projectId}/assets/local`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
   updateAsset: (projectId: string, assetId: string, data: UpdateAssetParams) => {
     return client.put(`/v1/projects/${projectId}/assets/${assetId}`, data)
   },

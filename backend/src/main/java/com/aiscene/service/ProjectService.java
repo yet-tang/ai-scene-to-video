@@ -272,4 +272,57 @@ public class ProjectService {
 
         return savedAsset;
     }
+
+    @Transactional
+    public Asset uploadAssetLocal(UUID projectId, MultipartFile file) {
+        Project project = getProject(projectId);
+
+        // Update status to UPLOADING if it's DRAFT
+        if (project.getStatus() == ProjectStatus.DRAFT) {
+            project.setStatus(ProjectStatus.UPLOADING);
+            projectRepository.save(project);
+        }
+
+        String ossUrl;
+        try {
+            // Ensure temp directory exists
+            java.nio.file.Path tempDir = java.nio.file.Paths.get("/tmp/ai-video-uploads");
+            if (!java.nio.file.Files.exists(tempDir)) {
+                java.nio.file.Files.createDirectories(tempDir);
+            }
+
+            // Save file to local temp
+            String originalFilename = file.getOriginalFilename();
+            String extension = "";
+            if (originalFilename != null && originalFilename.contains(".")) {
+                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
+            }
+            String localFilename = UUID.randomUUID() + extension;
+            java.nio.file.Path localPath = tempDir.resolve(localFilename);
+            file.transferTo(localPath.toFile());
+
+            // Use file:// protocol for Worker to recognize local path
+            // But for frontend playback, we need to map it to our http endpoint if we want it to work in browser immediately
+            // However, the worker expects file:// or http://.
+            // Our store logic handles file:// -> http:// conversion.
+            ossUrl = "file://" + localPath.toAbsolutePath().toString();
+
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to save file locally", e);
+        }
+
+        Asset asset = Asset.builder()
+                .project(project)
+                .ossUrl(ossUrl)
+                .duration(0.0)
+                .sortOrder(0)
+                .build();
+
+        Asset savedAsset = assetRepository.save(asset);
+
+        // Submit Analysis Task to Redis Queue
+        taskQueueService.submitAnalysisTask(project.getId(), savedAsset.getId(), savedAsset.getOssUrl());
+
+        return savedAsset;
+    }
 }

@@ -244,8 +244,8 @@ const onSubmit = async () => {
         fileItem.status = 'uploading'
         fileItem.message = '0%'
 
-        // 使用 FormData 直接上传
-        await projectApi.uploadAsset(projectId, fileItem.file)
+        // 使用 FormData 直接上传 (强制使用 Local Upload 接口)
+        await projectApi.uploadAssetLocal(projectId, fileItem.file)
 
         fileItem.status = 'done'
         fileItem.message = '完成'
