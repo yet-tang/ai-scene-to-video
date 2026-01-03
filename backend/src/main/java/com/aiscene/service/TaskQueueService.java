@@ -86,7 +86,7 @@ public class TaskQueueService {
         public String id;
         public String task;
         public Object[] args;
-        public Object kwargs = new Object();
+        public Map<String, Object> kwargs = new HashMap<>();
         public Map<String, Object> headers = new HashMap<>();
         public int retries = 0;
 

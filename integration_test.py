@@ -101,7 +101,7 @@ def main():
     # 2. Upload Asset (Mocking a small video file)
     print("\n--- Step 2: Upload Asset ---")
     # Create a dummy file
-    dummy_filename = "test_video.mp4"
+    dummy_filename = "normal_video.mp4"
     with open(dummy_filename, "wb") as f:
         f.write(b"fake video content for testing flow logic, not actual processing")
     

@@ -6,6 +6,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.ColumnTransformer;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -34,6 +35,7 @@ public class Project {
     // In production, consider using a proper JSON Type with Hypersistence Utils.
     @Column(name = "house_info", columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
+    @ColumnTransformer(write = "?::jsonb")
     private JsonNode houseInfo;
 
     @Enumerated(EnumType.STRING)
