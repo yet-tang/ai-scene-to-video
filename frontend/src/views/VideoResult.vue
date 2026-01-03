@@ -56,8 +56,14 @@
       </div>
     </div>
 
+    <div class="loading-state" v-else-if="isLoading || projectStore.currentProject.status === 'RENDERING' || projectStore.currentProject.status === 'AUDIO_GENERATED'">
+      <van-loading size="48px" vertical>视频合成中...</van-loading>
+      <div class="loading-desc">预计耗时 1-2 分钟，请稍候</div>
+    </div>
+
     <div class="empty-state" v-else>
       <van-empty description="视频生成失败或已过期" />
+      <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">处理失败，请重试</div>
       <van-button round type="primary" @click="router.push('/create')">
         返回首页
       </van-button>
@@ -66,12 +72,56 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { showToast, showSuccessToast } from 'vant'
 
+const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
+const projectId = route.params.id as string
+
+const isLoading = ref(true)
+let pollTimer: any = null
+
+onMounted(async () => {
+  if (!projectId) {
+    router.replace('/create')
+    return
+  }
+  
+  await checkStatus()
+  startPolling()
+})
+
+onUnmounted(() => {
+  stopPolling()
+})
+
+const checkStatus = async () => {
+  try {
+    await projectStore.fetchProject(projectId)
+    isLoading.value = false
+    
+    const status = projectStore.currentProject.status
+    if (status === 'COMPLETED' || status === 'FAILED') {
+      stopPolling()
+    }
+  } catch (e) {
+    showToast('获取状态失败')
+    stopPolling()
+  }
+}
+
+const startPolling = () => {
+  stopPolling()
+  pollTimer = setInterval(checkStatus, 3000)
+}
+
+const stopPolling = () => {
+  if (pollTimer) clearInterval(pollTimer)
+}
 
 const downloadVideo = () => {
   // 实际场景如果是 H5，可能需要引导用户长按保存或调用原生桥接
@@ -151,6 +201,25 @@ const shareVideo = () => {
 
 .mb-16 {
   margin-bottom: 16px;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.loading-desc {
+  margin-top: 16px;
+  color: #969799;
+  font-size: 14px;
+}
+
+.error-text {
+  color: #ee0a24;
+  margin: 10px 0;
 }
 
 .empty-state {

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { projectApi } from '../api/project'
 
 export interface ProjectInfo {
   communityName: string
@@ -16,25 +17,26 @@ export interface ProjectInfo {
 
 export interface Asset {
   id: string
-  file?: File
-  url: string // Local preview URL or OSS URL
+  url: string // OSS URL
   sceneLabel: string
   userLabel: string
   duration: number
   sortOrder: number
-  thumbnail?: string
+  sceneScore?: number
 }
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<{
     id: string
+    title: string
     info: ProjectInfo
     assets: Asset[]
     script: string
     finalVideoUrl: string
-    status: 'draft' | 'uploading' | 'analyzing' | 'review' | 'rendering' | 'completed' | 'failed'
+    status: string
   }>({
     id: '',
+    title: '',
     info: {
       communityName: '',
       layout: { room: 2, hall: 1, restroom: 1 },
@@ -46,33 +48,65 @@ export const useProjectStore = defineStore('project', () => {
     assets: [],
     script: '',
     finalVideoUrl: '',
-    status: 'draft'
+    status: 'DRAFT'
   })
 
-  function setProjectInfo(info: ProjectInfo) {
-    currentProject.value.info = info
-  }
-
-  function addAssets(newAssets: Asset[]) {
-    currentProject.value.assets.push(...newAssets)
-  }
-
-  function updateAsset(id: string, updates: Partial<Asset>) {
-    const asset = currentProject.value.assets.find(a => a.id === id)
-    if (asset) {
-      Object.assign(asset, updates)
+  async function fetchProject(id: string) {
+    try {
+      const { data } = await projectApi.getProject(id)
+      // Map backend response to store state
+      currentProject.value.id = data.id
+      currentProject.value.title = data.title
+      currentProject.value.status = data.status
+      currentProject.value.script = data.scriptContent
+      currentProject.value.finalVideoUrl = data.finalVideoUrl
+      
+      // Parse houseInfo (JSON)
+      if (data.houseInfo) {
+        const h = data.houseInfo
+        currentProject.value.info = {
+            communityName: h.community || '',
+            layout: { 
+                room: h.room || 0, 
+                hall: h.hall || 0, 
+                restroom: h.restroom || 0 
+            },
+            area: h.area,
+            price: h.price,
+            sellingPoints: h.sellingPoints || [],
+            remarks: h.remarks || ''
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch project', error)
+      throw error
     }
   }
 
-  function setTimeline(assets: Asset[]) {
-    currentProject.value.assets = assets
+  async function fetchTimeline(id: string) {
+    try {
+      const { data } = await projectApi.getTimeline(id)
+      currentProject.value.assets = data.assets.map((a: any) => ({
+        id: a.id,
+        url: a.ossUrl,
+        sceneLabel: a.sceneLabel,
+        userLabel: a.userLabel || a.sceneLabel,
+        duration: a.duration || 0,
+        sortOrder: a.sortOrder,
+        sceneScore: a.sceneScore
+      }))
+      if (data.scriptContent) {
+        currentProject.value.script = data.scriptContent
+      }
+    } catch (error) {
+        console.error('Failed to fetch timeline', error)
+        throw error
+    }
   }
 
   return {
     currentProject,
-    setProjectInfo,
-    addAssets,
-    updateAsset,
-    setTimeline
+    fetchProject,
+    fetchTimeline
   }
 })

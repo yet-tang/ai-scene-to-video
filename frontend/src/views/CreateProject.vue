@@ -102,6 +102,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore, type ProjectInfo, type Asset } from '../stores/project'
+import { projectApi } from '../api/project'
 import { showToast } from 'vant'
 
 const router = useRouter()
@@ -131,66 +132,42 @@ const onSubmit = async () => {
 
   isSubmitting.value = true
 
-  // 模拟上传和 AI 分析过程
-  setTimeout(() => {
-    // 1. 保存基础信息
-    projectStore.setProjectInfo({ ...formData })
-    projectStore.currentProject.id = Date.now().toString()
-
-    // 2. 处理上传的文件 (Mock Assets)
-    const newAssets: Asset[] = fileList.value.map((fileItem, index) => {
-      // 模拟 AI 识别结果
-      const mockScenes = ['小区大门', '客厅', '卧室', '厨房', '卫生间', '阳台']
-      const randomScene = mockScenes[index % mockScenes.length] || '其他'
-      
-      return {
-        id: `asset-${Date.now()}-${index}`,
-        file: fileItem.file,
-        url: fileItem.objectUrl || URL.createObjectURL(fileItem.file),
-        sceneLabel: randomScene,
-        userLabel: randomScene, // 初始默认一致
-        duration: 10 + Math.random() * 10, // 模拟时长
-        sortOrder: index,
-        thumbnail: '' // 实际项目中需要生成缩略图，这里暂略或用视频第一帧逻辑(复杂)
+  try {
+    // 1. 创建项目
+    const createRes = await projectApi.create({
+      userId: 1, // Mock user ID or from auth store
+      title: `${formData.communityName} ${formData.layout.room}室${formData.layout.hall}厅`,
+      houseInfo: {
+        community: formData.communityName,
+        room: formData.layout.room,
+        hall: formData.layout.hall,
+        price: formData.price || 0,
+        area: formData.area,
+        sellingPoints: formData.sellingPoints,
+        remarks: formData.remarks
       }
     })
-
-    // 3. 智能排序 (Mock: 外景 -> 客厅 -> 厨房/卫 -> 卧室)
-    // 简单模拟排序权重
-    const scenePriority: Record<string, number> = {
-      '小区大门': 1,
-      '客厅': 2,
-      '厨房': 3,
-      '卫生间': 4,
-      '卧室': 5,
-      '阳台': 6
-    }
     
-    newAssets.sort((a, b) => {
-      const pA = scenePriority[a.sceneLabel] || 99
-      const pB = scenePriority[b.sceneLabel] || 99
-      return pA - pB
+    const projectId = createRes.data.id
+    console.log('Project created:', projectId)
+
+    // 2. 并发上传文件
+    const uploadPromises = fileList.value.map(fileItem => {
+      return projectApi.uploadAsset(projectId, fileItem.file)
     })
+
+    await Promise.all(uploadPromises)
+    showToast('项目创建成功，开始智能分析...')
     
-    // 更新 sortOrder
-    newAssets.forEach((asset, idx) => asset.sortOrder = idx)
+    // 3. 跳转到确认页
+    router.push(`/review/${projectId}`)
 
-    projectStore.setTimeline(newAssets)
-    projectStore.currentProject.status = 'review'
-
-    // 生成模拟脚本
-    const script = `哈喽大家好，今天带大家看一套${formData.communityName}的房子。
-这套房子是${formData.layout.room}室${formData.layout.hall}厅，面积${formData.area}平米。
-进门就是${newAssets.find(a => a.sceneLabel === '客厅')?.userLabel || '宽敞的客厅'}，采光非常好。
-${formData.sellingPoints.length > 0 ? '核心卖点是' + formData.sellingPoints.join('，') + '。' : ''}
-总价只要${formData.price}万，性价比超高，喜欢的赶紧联系我吧！`
-    
-    projectStore.currentProject.script = script
-
+  } catch (error) {
+    console.error(error)
+    showToast('提交失败，请重试')
+  } finally {
     isSubmitting.value = false
-    // 跳转到确认页
-    router.push(`/review/${projectStore.currentProject.id}`)
-  }, 2000)
+  }
 }
 </script>
 

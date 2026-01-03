@@ -70,7 +70,12 @@
 
     <!-- 脚本预览 -->
     <div class="script-preview">
-      <div class="section-title">预览解说词全文:</div>
+      <div class="section-title-row">
+        <div class="section-title">预览解说词全文:</div>
+        <van-button size="small" type="primary" plain @click="onGenerateScript" :loading="isScriptGenerating">
+          生成 AI 解说词
+        </van-button>
+      </div>
       <van-field
         v-model="scriptContent"
         type="textarea"
@@ -78,12 +83,13 @@
         autosize
         border
         class="script-input"
+        placeholder="点击上方按钮生成，或直接输入..."
       />
     </div>
 
     <!-- 底部按钮 -->
     <div class="bottom-action">
-      <van-button round block type="primary" @click="onGenerate" :loading="isGenerating">
+      <van-button round block type="primary" @click="onGenerateVideo" :loading="isRendering">
         生成最终视频
       </van-button>
     </div>
@@ -100,18 +106,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore, type Asset } from '../stores/project'
+import { projectApi } from '../api/project'
 import draggable from 'vuedraggable'
 import { showToast } from 'vant'
 
+const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
+const projectId = route.params.id as string
 
 const assets = ref<Asset[]>([])
 const scriptContent = ref('')
-const isGenerating = ref(false)
+const isScriptGenerating = ref(false)
+const isRendering = ref(false)
+let pollTimer: any = null
 
 // 场景选择
 const showPicker = ref(false)
@@ -129,19 +140,79 @@ const sceneOptions = [
   { text: '书房', value: '书房' },
 ]
 
-onMounted(() => {
-  // 从 Store 加载数据
-  if (projectStore.currentProject.assets.length === 0) {
-    // 如果没有数据（比如刷新了），重定向回首页或 Mock 数据
-    // 这里为了演示方便，如果为空则跳回 create
-    if (!projectStore.currentProject.id) {
-      router.replace('/create')
-      return
-    }
+onMounted(async () => {
+  if (!projectId) {
+    showToast('参数错误')
+    router.replace('/create')
+    return
   }
-  assets.value = [...projectStore.currentProject.assets]
-  scriptContent.value = projectStore.currentProject.script
+
+  await loadData()
+  startPolling()
 })
+
+onUnmounted(() => {
+  stopPolling()
+})
+
+const loadData = async () => {
+  try {
+    await projectStore.fetchProject(projectId)
+    await projectStore.fetchTimeline(projectId)
+    
+    assets.value = [...projectStore.currentProject.assets]
+    if (projectStore.currentProject.script) {
+        scriptContent.value = projectStore.currentProject.script
+    }
+  } catch (e) {
+    showToast('加载失败')
+  }
+}
+
+const startPolling = () => {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    // Poll until all assets have scene labels (analysis done)
+    await projectStore.fetchTimeline(projectId)
+    const newAssets = projectStore.currentProject.assets
+    
+    // Only update if we are not dragging? 
+    // Updating list while dragging causes issues.
+    // For MVP, we simply update if length changed or status changed.
+    // Better: only update missing labels.
+    let hasUpdate = false
+    newAssets.forEach((newAsset, idx) => {
+        const current = assets.value.find(a => a.id === newAsset.id)
+        if (current) {
+            if (!current.sceneLabel && newAsset.sceneLabel) {
+                current.sceneLabel = newAsset.sceneLabel
+                current.userLabel = newAsset.userLabel
+                current.sceneScore = newAsset.sceneScore
+                hasUpdate = true
+            }
+        }
+    })
+    
+    if (hasUpdate) {
+        showToast('AI 分析已更新')
+    }
+    
+    // Also check script status if we are waiting for it
+    if (isScriptGenerating.value) {
+        await projectStore.fetchProject(projectId)
+        if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
+            scriptContent.value = projectStore.currentProject.script
+            isScriptGenerating.value = false
+            showToast('脚本生成完成')
+        }
+    }
+
+  }, 3000)
+}
+
+const stopPolling = () => {
+  if (pollTimer) clearInterval(pollTimer)
+}
 
 const totalDuration = computed(() => {
   const totalSeconds = assets.value.reduce((sum, item) => sum + item.duration, 0)
@@ -168,14 +239,31 @@ const formatTimeRange = (index: number) => {
   return `${format(startTime)} - ${format(endTime)}`
 }
 
-const onDragEnd = () => {
-  // 更新 Store 中的顺序
-  projectStore.setTimeline(assets.value)
+const onDragEnd = async () => {
+  // Update Sort Order
+  // We need to update ALL assets sort order in backend?
+  // Or just the moved one?
+  // Backend relies on sort_order. We should update all to be safe (0, 1, 2...)
+  const updates = assets.value.map((asset, index) => {
+    return projectApi.updateAsset(projectId, asset.id, { sortOrder: index })
+  })
+  
+  try {
+    await Promise.all(updates)
+    // Sync store
+    projectStore.currentProject.assets = assets.value
+  } catch (e) {
+    showToast('排序保存失败')
+  }
 }
 
 const removeAsset = (index: number) => {
-  assets.value.splice(index, 1)
-  projectStore.setTimeline(assets.value)
+  // Backend doesn't support delete asset yet?
+  // We can just hide it locally or add delete API.
+  // For MVP, just remove from local list (won't be included in script if we regenerate?)
+  // Actually generateScript reads from DB. So we MUST delete from DB or mark ignored.
+  // Missing backend API for delete.
+  showToast('暂不支持删除片段')
 }
 
 const openScenePicker = (index: number) => {
@@ -183,33 +271,60 @@ const openScenePicker = (index: number) => {
   showPicker.value = true
 }
 
-const onSceneConfirm = ({ selectedOptions }: any) => {
+const onSceneConfirm = async ({ selectedOptions }: any) => {
   const asset = assets.value[editingIndex.value]
   if (editingIndex.value > -1 && selectedOptions[0] && asset) {
     const newVal = selectedOptions[0].text
     asset.userLabel = newVal
-    // 更新 Store
-    projectStore.updateAsset(asset.id, { userLabel: newVal })
+    
+    try {
+        await projectApi.updateAsset(projectId, asset.id, { userLabel: newVal })
+    } catch (e) {
+        showToast('修改失败')
+    }
   }
   showPicker.value = false
 }
 
-const onGenerate = () => {
-  isGenerating.value = true
-  projectStore.currentProject.script = scriptContent.value
+const onGenerateScript = async () => {
+    isScriptGenerating.value = true
+    try {
+        await projectApi.generateScript(projectId)
+        showToast('正在生成解说词...')
+    } catch (e) {
+        isScriptGenerating.value = false
+        showToast('请求失败')
+    }
+}
+
+const onGenerateVideo = async () => {
+  if (!scriptContent.value) {
+    showToast('请先生成或填写解说词')
+    return
+  }
   
-  // 模拟生成过程
-  setTimeout(() => {
-    isGenerating.value = false
-    projectStore.currentProject.status = 'completed'
-    // 模拟生成了一个视频 URL (这里用第一段视频的 URL 代替)
-    projectStore.currentProject.finalVideoUrl = assets.value[0]?.url || ''
-    router.push(`/result/${projectStore.currentProject.id}`)
-  }, 3000)
+  isRendering.value = true
+  try {
+      // 1. Generate Audio
+      await projectApi.generateAudio(projectId, scriptContent.value)
+      // 2. Render Video
+      await projectApi.renderVideo(projectId)
+      
+      router.push(`/result/${projectId}`)
+  } catch (e) {
+      showToast('提交任务失败')
+      isRendering.value = false
+  }
 }
 </script>
 
 <style scoped>
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
 .review-timeline {
   padding-bottom: 80px;
   background-color: #f7f8fa;

@@ -1,6 +1,7 @@
 package com.aiscene.service;
 
 import com.aiscene.dto.CreateProjectRequest;
+import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
@@ -70,6 +71,31 @@ public class ProjectService {
                 .assets(assets)
                 .scriptContent(project.getScriptContent()) // Might be null initially
                 .build();
+    }
+
+    @Transactional
+    public Asset updateAsset(UUID assetId, UpdateAssetRequest request) {
+        Asset asset = assetRepository.findById(assetId)
+                .orElseThrow(() -> new RuntimeException("Asset not found"));
+
+        if (request.getUserLabel() != null) {
+            asset.setUserLabel(request.getUserLabel());
+            // Also update sceneLabel if user explicitly changes it (frontend usually sends userLabel)
+            // Or we keep sceneLabel as AI result and use userLabel for display/generation priority.
+            // Logic: script generation uses scene_label in current code. 
+            // We should probably update sceneLabel too OR make script gen prefer userLabel.
+            // Let's look at `generateScript`... it puts `scene_label` into the map.
+            // To be safe for now, let's update sceneLabel too if userLabel is provided, 
+            // so existing script gen logic picks it up.
+            // Ideally we should refactor script gen to look at userLabel first.
+            asset.setSceneLabel(request.getUserLabel());
+        }
+        
+        if (request.getSortOrder() != null) {
+            asset.setSortOrder(request.getSortOrder());
+        }
+
+        return assetRepository.save(asset);
     }
 
     @Transactional

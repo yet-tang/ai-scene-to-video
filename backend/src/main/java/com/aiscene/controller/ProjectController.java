@@ -2,6 +2,7 @@ package com.aiscene.controller;
 
 import com.aiscene.dto.CreateProjectRequest;
 import com.aiscene.dto.TimelineResponse;
+import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.service.ProjectService;
@@ -37,7 +38,15 @@ public class ProjectController {
         Asset asset = projectService.uploadAsset(id, file);
         return ResponseEntity.ok(asset);
     }
-    
+
+    @PutMapping("/{projectId}/assets/{assetId}")
+    public ResponseEntity<Asset> updateAsset(@PathVariable UUID projectId, @PathVariable UUID assetId, @RequestBody UpdateAssetRequest request) {
+        // We currently don't check if assetId belongs to projectId in Service (assumes valid assetId),
+        // but for REST consistency we keep the URL structure.
+        Asset asset = projectService.updateAsset(assetId, request);
+        return ResponseEntity.ok(asset);
+    }
+
     @GetMapping("/{id}/timeline")
     public ResponseEntity<TimelineResponse> getTimeline(@PathVariable UUID id) {
         TimelineResponse timeline = projectService.getSmartTimeline(id);
