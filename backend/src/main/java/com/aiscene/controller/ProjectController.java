@@ -13,7 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/ai-video/v1/projects")
+@RequestMapping("/v1/projects")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*") // Allow all for MVP dev
 public class ProjectController {

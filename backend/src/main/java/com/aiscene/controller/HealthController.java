@@ -12,7 +12,6 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 
 @RestController
-@RequestMapping("/api/ai-video")
 @RequiredArgsConstructor
 public class HealthController {
 

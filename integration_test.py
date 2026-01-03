@@ -3,17 +3,54 @@ import time
 import sys
 import json
 import os
+import argparse
+import uuid
 
 # Configuration
-# Default to localhost if not provided, but intended for deployed URL
-BASE_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8090"
-if BASE_URL.endswith('/'):
-    BASE_URL = BASE_URL[:-1]
+parser = argparse.ArgumentParser()
+parser.add_argument("base_url", nargs="?", default="http://localhost:8090")
+parser.add_argument(
+    "--api-key",
+    default=os.getenv("AI_VIDEO_API_KEY") or os.getenv("API_KEY"),
+)
+parser.add_argument(
+    "--projects-path",
+    default=os.getenv("AI_VIDEO_PROJECTS_PATH") or "/api/ai-video/v1/projects",
+)
+parser.add_argument(
+    "--no-auto-detect",
+    action="store_true",
+)
+args = parser.parse_args()
+
+BASE_URL = args.base_url.rstrip("/")
+api_key = args.api_key
+projects_path = (args.projects_path or "").rstrip("/") or "/api/ai-video/v1/projects"
+if not projects_path.startswith("/"):
+    projects_path = f"/{projects_path}"
 
 print(f"Testing API at: {BASE_URL}")
 
+session = requests.Session()
+if api_key:
+    auth_value = api_key if api_key.startswith("ApiKey ") else f"ApiKey {api_key}"
+    session.headers.update({"Authorization": auth_value})
+    session.headers.update({"X-Api-Key": api_key})
+
+def api_request(method, path, **kwargs):
+    headers = kwargs.pop("headers", {})
+    headers = dict(headers)
+    headers.setdefault("X-Request-Id", str(uuid.uuid4()))
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return session.request(method, f"{BASE_URL}{path}", headers=headers, **kwargs)
+
 def check_status(response):
     if response.status_code not in [200, 201, 202]:
+        try:
+            print(f"URL: {response.request.method} {response.request.url}")
+        except Exception:
+            pass
         print(f"Error: {response.status_code}")
         print(response.text)
         sys.exit(1)
@@ -23,7 +60,7 @@ def wait_for_status(project_id, target_status, timeout=300):
     print(f"Waiting for project {project_id} to reach status {target_status}...")
     start_time = time.time()
     while time.time() - start_time < timeout:
-        res = requests.get(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}")
+        res = api_request("GET", f"{projects_path}/{project_id}")
         if res.status_code == 200:
             data = res.json()
             current_status = data.get("status")
@@ -54,7 +91,21 @@ def main():
             "price": 500
         }
     }
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects", json=project_payload)
+    global projects_path
+    create_candidates = [projects_path]
+    if not args.no_auto_detect:
+        if projects_path.startswith("/api/ai-video/"):
+            create_candidates.append(f"/api/ai-video{projects_path}")
+
+    res = None
+    for candidate in create_candidates:
+        attempt = api_request("POST", candidate, json=project_payload)
+        if attempt.status_code in [200, 201, 202]:
+            projects_path = candidate
+            res = attempt
+            break
+        res = attempt
+
     check_status(res)
     project_data = res.json()
     project_id = project_data.get("id")
@@ -68,7 +119,7 @@ def main():
         f.write(b"fake video content for testing flow logic, not actual processing")
     
     files = {'file': (dummy_filename, open(dummy_filename, 'rb'), 'video/mp4')}
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}/assets", files=files)
+    res = api_request("POST", f"{projects_path}/{project_id}/assets", files=files)
     check_status(res)
     asset_data = res.json()
     print(f"Asset Uploaded: {asset_data.get('id')}")
@@ -92,7 +143,7 @@ def main():
     # If not, I'll skip to Script Generation which takes manual input if analysis is missing.
     
     # Let's try to call analyze
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}/analyze")
+    res = api_request("POST", f"{projects_path}/{project_id}/analyze")
     if res.status_code == 404:
         print("Analyze endpoint not found, maybe triggered automatically or missing. Skipping...")
     else:
@@ -103,7 +154,7 @@ def main():
     
     # 4. Generate Script
     print("\n--- Step 4: Generate Script ---")
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}/script")
+    res = api_request("POST", f"{projects_path}/{project_id}/script")
     check_status(res)
     wait_for_status(project_id, "SCRIPT_GENERATED")
     
@@ -112,11 +163,16 @@ def main():
     # We need to fetch the script first to pass it back?
     # Controller `generateAudio` takes body `scriptContent`.
     # Let's get the project again.
-    res = requests.get(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}")
+    res = api_request("GET", f"{projects_path}/{project_id}")
     project_data = res.json()
-    script_content = project_data.get("script_content", "Default script content for testing.")
+    script_content = project_data.get("scriptContent") or project_data.get("script_content") or "Default script content for testing."
     
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}/audio", data=script_content)
+    res = api_request(
+        "POST",
+        f"{projects_path}/{project_id}/audio",
+        data=script_content.encode("utf-8"),
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+    )
     check_status(res)
     # Wait for audio? There is no explicit status for AUDIO_GENERATED in the snippet I saw, 
     # but maybe it just updates internal state.
@@ -125,7 +181,7 @@ def main():
     
     # 6. Render Video
     print("\n--- Step 6: Render Video ---")
-    res = requests.post(f"{BASE_URL}/api/ai-video/v1/projects/{project_id}/render")
+    res = api_request("POST", f"{projects_path}/{project_id}/render")
     check_status(res)
     final_data = wait_for_status(project_id, "COMPLETED")
     
