@@ -44,8 +44,8 @@ management:
         enabled: true
 
 logging:
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [trace_id=%X{request_id}] [user_id=%X{user_id}] --- [%15.15t] %-40.40c{1.} : %m%n"
+  level:
+    root: INFO
 
 # S3 Storage (Cloudflare R2 / AWS S3 / MinIO) Configuration
 s3:

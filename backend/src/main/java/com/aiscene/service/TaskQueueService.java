@@ -33,27 +33,52 @@ public class TaskQueueService {
                 .asset_id(assetId.toString())
                 .video_url(videoUrl)
                 .build();
-        
-        sendCeleryTask("tasks.analyze_video_task", new Object[]{taskDto.getProject_id(), taskDto.getAsset_id(), taskDto.getVideo_url()});
-        log.info("Submitted analysis task for asset {}", assetId);
+
+        Map<String, Object> extraHeaders = new HashMap<>();
+        extraHeaders.put("project_id", taskDto.getProject_id());
+        extraHeaders.put("asset_id", taskDto.getAsset_id());
+        String taskId = sendCeleryTask(
+                "tasks.analyze_video_task",
+                new Object[]{taskDto.getProject_id(), taskDto.getAsset_id(), taskDto.getVideo_url()},
+                extraHeaders
+        );
+        log.info("Submitted analysis task task_id={} project_id={} asset_id={}", taskId, projectId, assetId);
     }
 
     public void submitScriptGenerationTask(UUID projectId, Object houseInfo, java.util.List<Object> timelineData) {
-        sendCeleryTask("tasks.generate_script_task", new Object[]{projectId.toString(), houseInfo, timelineData});
-        log.info("Submitted script generation task for project {}", projectId);
+        Map<String, Object> extraHeaders = new HashMap<>();
+        extraHeaders.put("project_id", projectId.toString());
+        String taskId = sendCeleryTask(
+                "tasks.generate_script_task",
+                new Object[]{projectId.toString(), houseInfo, timelineData},
+                extraHeaders
+        );
+        log.info("Submitted script generation task task_id={} project_id={}", taskId, projectId);
     }
 
     public void submitAudioGenerationTask(UUID projectId, String scriptContent) {
-        sendCeleryTask("tasks.generate_audio_task", new Object[]{projectId.toString(), scriptContent});
-        log.info("Submitted audio generation task for project {}", projectId);
+        Map<String, Object> extraHeaders = new HashMap<>();
+        extraHeaders.put("project_id", projectId.toString());
+        String taskId = sendCeleryTask(
+                "tasks.generate_audio_task",
+                new Object[]{projectId.toString(), scriptContent},
+                extraHeaders
+        );
+        log.info("Submitted audio generation task task_id={} project_id={}", taskId, projectId);
     }
 
     public void submitRenderVideoTask(UUID projectId, java.util.List<Object> timelineAssets, String audioPath) {
-        sendCeleryTask("tasks.render_video_task", new Object[]{projectId.toString(), timelineAssets, audioPath});
-        log.info("Submitted render video task for project {}", projectId);
+        Map<String, Object> extraHeaders = new HashMap<>();
+        extraHeaders.put("project_id", projectId.toString());
+        String taskId = sendCeleryTask(
+                "tasks.render_video_task",
+                new Object[]{projectId.toString(), timelineAssets, audioPath},
+                extraHeaders
+        );
+        log.info("Submitted render video task task_id={} project_id={}", taskId, projectId);
     }
 
-    private void sendCeleryTask(String taskName, Object[] args) {
+    private String sendCeleryTask(String taskName, Object[] args, Map<String, Object> extraHeaders) {
         try {
             String taskId = UUID.randomUUID().toString();
 
@@ -76,6 +101,13 @@ public class TaskQueueService {
             String userId = MDC.get("user_id");
             if (userId != null) {
                 headers.put("user_id", userId);
+            }
+            if (extraHeaders != null) {
+                for (Map.Entry<String, Object> entry : extraHeaders.entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null) {
+                        headers.put(entry.getKey(), entry.getValue());
+                    }
+                }
             }
 
             Map<String, Object> embed = new HashMap<>();
@@ -109,6 +141,7 @@ public class TaskQueueService {
 
             String jsonMessage = objectMapper.writeValueAsString(message);
             redisTemplate.opsForList().leftPush(QUEUE_NAME, jsonMessage);
+            return taskId;
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize task message for {}", taskName, e);
             throw new RuntimeException("Failed to submit task", e);

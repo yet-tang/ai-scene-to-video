@@ -12,11 +12,28 @@ import os
 import boto3
 import uuid
 import urllib.request
+import time
 from urllib.parse import urlparse
 
 # Configure logging
 # Logging is configured in worker.py via signals
 logger = logging.getLogger(__name__)
+
+def _url_host(url: str) -> str:
+    try:
+        p = urlparse(url)
+        return p.hostname or ""
+    except Exception:
+        return ""
+
+def _log_info(event: str, **fields):
+    logger.info(event, extra={"event": event, **fields})
+
+def _log_warning(event: str, **fields):
+    logger.warning(event, extra={"event": event, **fields})
+
+def _log_exception(event: str, **fields):
+    logger.exception(event, extra={"event": event, **fields})
 
 # S3 Client Initialization
 s3_client = boto3.client(
@@ -29,7 +46,19 @@ s3_client = boto3.client(
 
 def upload_to_s3(file_path: str, object_name: str) -> str:
     """Upload a file to S3 bucket and return public URL"""
+    started = time.monotonic()
     try:
+        size_bytes = None
+        try:
+            size_bytes = os.path.getsize(file_path)
+        except Exception:
+            pass
+        _log_info(
+            "s3.upload.start",
+            bucket=Config.S3_STORAGE_BUCKET,
+            object_key=object_name,
+            **({"bytes": size_bytes} if size_bytes is not None else {}),
+        )
         s3_client.upload_file(
             file_path,
             Config.S3_STORAGE_BUCKET,
@@ -59,12 +88,33 @@ def upload_to_s3(file_path: str, object_name: str) -> str:
             or ".amazonaws.com" in host
             or "localhost" in host
         ):
-            return f"{base}/{bucket}/{object_name}"
+            public_url = f"{base}/{bucket}/{object_name}"
+            _log_info(
+                "s3.upload.finish",
+                bucket=bucket,
+                object_key=object_name,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                url_host=_url_host(public_url),
+            )
+            return public_url
 
-        return f"{base}/{object_name}"
+        public_url = f"{base}/{object_name}"
+        _log_info(
+            "s3.upload.finish",
+            bucket=bucket,
+            object_key=object_name,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            url_host=_url_host(public_url),
+        )
+        return public_url
     except Exception as e:
-        logger.error(f"Failed to upload to S3: {str(e)}")
-        raise e
+        _log_exception(
+            "s3.upload.error",
+            bucket=Config.S3_STORAGE_BUCKET,
+            object_key=object_name,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        raise
 
 def _is_http_url(url: str) -> bool:
     try:
@@ -74,10 +124,16 @@ def _is_http_url(url: str) -> bool:
         return False
 
 def _download_to_temp(video_url: str) -> str:
+    started = time.monotonic()
     # Support local file protocol for optimization
     if video_url.startswith("file://"):
         local_path = video_url.replace("file://", "")
         if os.path.exists(local_path):
+            _log_info(
+                "download.skip_local",
+                url_host=_url_host(video_url),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             return local_path
         filename = os.path.basename(local_path)
         base = (Config.LOCAL_ASSET_HTTP_BASE_URL or "").rstrip("/")
@@ -86,7 +142,19 @@ def _download_to_temp(video_url: str) -> str:
     
     temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     temp_video.close()
+    _log_info("download.start", url_host=_url_host(video_url))
     urllib.request.urlretrieve(video_url, temp_video.name)
+    size_bytes = None
+    try:
+        size_bytes = os.path.getsize(temp_video.name)
+    except Exception:
+        pass
+    _log_info(
+        "download.finish",
+        url_host=_url_host(video_url),
+        duration_ms=int((time.monotonic() - started) * 1000),
+        **({"bytes": size_bytes} if size_bytes is not None else {}),
+    )
     return temp_video.name
 
 def _get_video_duration_sec(video_url: str) -> float:
@@ -140,6 +208,7 @@ def _coerce_segments(raw: dict) -> list[dict]:
     return normalized
 
 def _advance_project_status(project_id: str):
+    started = time.monotonic()
     conn = psycopg2.connect(Config.DB_DSN)
     try:
         with conn:
@@ -174,10 +243,18 @@ def _advance_project_status(project_id: str):
                         """,
                         (project_id,),
                     )
+        _log_info(
+            "db.project_status.advance",
+            project_id=project_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            status="ok",
+            **({"remaining_assets": remaining} if remaining is not None else {}),
+        )
     finally:
         conn.close()
 
 def _process_split_logic(project_id: str, asset_id: str, video_url: str, segments: list, local_video_path: str = None):
+    started = time.monotonic()
     if len(segments) >= 2:
         if not local_video_path:
             local_video = _download_to_temp(video_url)
@@ -189,6 +266,13 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
         inserted_assets = []
         try:
             video = VideoFileClip(local_video)
+            _log_info(
+                "split.start",
+                project_id=project_id,
+                asset_id=asset_id,
+                segments_count=len(segments),
+                video_duration_sec=float(video.duration or 0.0),
+            )
             segments = [
                 s
                 for s in segments
@@ -280,6 +364,13 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                 video.close()
             except Exception:
                 pass
+            _log_info(
+                "split.finish",
+                project_id=project_id,
+                asset_id=asset_id,
+                segments_count=len(inserted_assets),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         finally:
             # Only cleanup if we downloaded it. If it was passed from outside (file://), we might want to keep it or not.
             # But _download_to_temp returns the file path.
@@ -306,41 +397,109 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
     """
     Background task to analyze a video asset.
     """
-    logger.info(f"Received analyze_video_task for asset {asset_id} in project {project_id}. URL: {video_url}")
+    started = time.monotonic()
+    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    _log_info(
+        "task.start",
+        task_name="analyze_video_task",
+        project_id=project_id,
+        asset_id=asset_id,
+        url_host=_url_host(video_url),
+        attempt=attempt,
+        retries=int(getattr(self.request, "retries", 0) or 0),
+    )
     
     try:
         _advance_project_status(project_id)
+        _log_info("step.start", step="download", project_id=project_id, asset_id=asset_id, url_host=_url_host(video_url))
         local_video = _download_to_temp(video_url)
         cleanup_local_video = not local_video.startswith("/tmp/ai-video-uploads/")
         duration_sec = _get_video_duration_sec(local_video)
+        _log_info(
+            "step.finish",
+            step="download",
+            project_id=project_id,
+            asset_id=asset_id,
+            video_duration_sec=float(duration_sec or 0.0),
+        )
 
         if (
             Config.SMART_SPLIT_ENABLED
             and duration_sec >= Config.SMART_SPLIT_MIN_DURATION_SEC
         ):
+            _log_info(
+                "split.decision",
+                project_id=project_id,
+                asset_id=asset_id,
+                strategy=Config.SMART_SPLIT_STRATEGY,
+                video_duration_sec=float(duration_sec or 0.0),
+            )
             # Branch 1: Qwen Video (End-to-End)
             if Config.SMART_SPLIT_STRATEGY == "qwen_video" and _is_http_url(video_url):
+                _log_info(
+                    "step.start",
+                    step="qwen_video_segments",
+                    project_id=project_id,
+                    asset_id=asset_id,
+                    model=Config.QWEN_VIDEO_MODEL,
+                )
                 segments_text = detector.analyze_video_segments(video_url)
                 segments_raw = _parse_model_json(segments_text)
                 segments = _coerce_segments(segments_raw)
+                _log_info(
+                    "step.finish",
+                    step="qwen_video_segments",
+                    project_id=project_id,
+                    asset_id=asset_id,
+                    segments_count=len(segments),
+                )
                 _process_split_logic(project_id, asset_id, video_url, segments)
                 _advance_project_status(project_id)
                 if cleanup_local_video and os.path.exists(local_video):
                     os.remove(local_video)
+                _log_info(
+                    "task.finish",
+                    task_name="analyze_video_task",
+                    project_id=project_id,
+                    asset_id=asset_id,
+                    status="split_completed",
+                    segments_count=len(segments),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
                 return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
             # Branch 2: Hybrid (SceneDetect + Qwen Image)
             elif Config.SMART_SPLIT_STRATEGY == "hybrid":
                 try:
+                    _log_info(
+                        "step.start",
+                        step="scenedetect",
+                        project_id=project_id,
+                        asset_id=asset_id,
+                        strategy="hybrid",
+                    )
                     shots = detector.detect_video_shots(local_video, threshold=Config.SCENE_DETECT_THRESHOLD)
                     if not shots:
                         shots = [(0.0, duration_sec)]
+                    _log_info(
+                        "step.finish",
+                        step="scenedetect",
+                        project_id=project_id,
+                        asset_id=asset_id,
+                        shot_count=len(shots),
+                    )
                     
                     shot_frames = []
                     import cv2
                     cap = cv2.VideoCapture(local_video)
                     
                     try:
+                        _log_info(
+                            "step.start",
+                            step="keyframes_from_shots",
+                            project_id=project_id,
+                            asset_id=asset_id,
+                        )
                         for start, end in shots:
                             mid_sec = (start + end) / 2
                             cap.set(cv2.CAP_PROP_POS_MSEC, mid_sec * 1000)
@@ -361,11 +520,32 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                                 temp_img.close()
                     finally:
                         cap.release()
+                    _log_info(
+                        "step.finish",
+                        step="keyframes_from_shots",
+                        project_id=project_id,
+                        asset_id=asset_id,
+                        frame_count=len(shot_frames),
+                    )
 
                     if shot_frames:
+                        _log_info(
+                            "step.start",
+                            step="qwen_group_shots",
+                            project_id=project_id,
+                            asset_id=asset_id,
+                            model=Config.QWEN_IMAGE_MODEL,
+                        )
                         segments_text = detector.analyze_shot_grouping(shot_frames)
                         segments_raw = _parse_model_json(segments_text)
                         segments = _coerce_segments(segments_raw)
+                        _log_info(
+                            "step.finish",
+                            step="qwen_group_shots",
+                            project_id=project_id,
+                            asset_id=asset_id,
+                            segments_count=len(segments),
+                        )
                         
                         for sf in shot_frames:
                             if os.path.exists(sf["image"]):
@@ -373,17 +553,53 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
 
                         _process_split_logic(project_id, asset_id, video_url, segments, local_video_path=local_video)
                         _advance_project_status(project_id)
+                        _log_info(
+                            "task.finish",
+                            task_name="analyze_video_task",
+                            project_id=project_id,
+                            asset_id=asset_id,
+                            status="split_completed",
+                            segments_count=len(segments),
+                            duration_ms=int((time.monotonic() - started) * 1000),
+                        )
                         return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
                 finally:
                     if cleanup_local_video and os.path.exists(local_video):
                         os.remove(local_video)
 
+        _log_info(
+            "step.start",
+            step="extract_key_frames",
+            project_id=project_id,
+            asset_id=asset_id,
+        )
         frame_paths = detector.extract_key_frames(local_video, num_frames=5)
+        _log_info(
+            "step.finish",
+            step="extract_key_frames",
+            project_id=project_id,
+            asset_id=asset_id,
+            frame_count=len(frame_paths),
+        )
+        _log_info(
+            "step.start",
+            step="qwen_analyze_frames",
+            project_id=project_id,
+            asset_id=asset_id,
+            model=Config.QWEN_IMAGE_MODEL,
+        )
         result_json_str = detector.analyze_scene_from_frames(frame_paths)
         result_data = _parse_model_json(result_json_str)
-        logger.info(f"Analysis result for {asset_id}: {result_data}")
+        _log_info(
+            "step.finish",
+            step="qwen_analyze_frames",
+            project_id=project_id,
+            asset_id=asset_id,
+            status="ok",
+        )
 
+        _log_info("step.start", step="db.update_asset", project_id=project_id, asset_id=asset_id)
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -403,7 +619,7 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                             asset_id,
                         ),
                     )
-            logger.info(f"Updated DB for asset {asset_id}")
+            _log_info("step.finish", step="db.update_asset", project_id=project_id, asset_id=asset_id)
         finally:
             conn.close()
 
@@ -412,10 +628,24 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
         if cleanup_local_video and os.path.exists(local_video):
             os.remove(local_video)
 
+        _log_info(
+            "task.finish",
+            task_name="analyze_video_task",
+            project_id=project_id,
+            asset_id=asset_id,
+            status="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return {"project_id": project_id, "asset_id": asset_id, "analysis": result_data}
 
     except Exception as e:
-        logger.error(f"Task failed for asset {asset_id}: {str(e)}")
+        _log_exception(
+            "task.error",
+            task_name="analyze_video_task",
+            project_id=project_id,
+            asset_id=asset_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         # Retry with exponential backoff
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
@@ -424,14 +654,24 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
     """
     Background task to generate video script using LLM.
     """
-    logger.info(f"Starting script generation for project {project_id}")
+    started = time.monotonic()
+    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    _log_info(
+        "task.start",
+        task_name="generate_script_task",
+        project_id=project_id,
+        attempt=attempt,
+        retries=int(getattr(self.request, "retries", 0) or 0),
+    )
     
     try:
         # 1. Generate Script
+        _log_info("step.start", step="llm.generate_script", task_name="generate_script_task", project_id=project_id)
         script_content = script_gen.generate_script(house_info, timeline_data)
-        logger.info(f"Generated script for {project_id}")
+        _log_info("step.finish", step="llm.generate_script", task_name="generate_script_task", project_id=project_id)
 
         # 2. Update Database
+        _log_info("step.start", step="db.update_project_script", task_name="generate_script_task", project_id=project_id)
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -443,17 +683,29 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
                         WHERE id = %s
                     """
                     cursor.execute(update_query, (script_content, project_id))
-            logger.info(f"Updated script in DB for project {project_id}")
+            _log_info("step.finish", step="db.update_project_script", task_name="generate_script_task", project_id=project_id)
         finally:
             conn.close()
 
+        _log_info(
+            "task.finish",
+            task_name="generate_script_task",
+            project_id=project_id,
+            status="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return {
             "project_id": project_id,
             "script": script_content
         }
 
     except Exception as e:
-        logger.error(f"Script generation failed for project {project_id}: {str(e)}")
+        _log_exception(
+            "task.error",
+            task_name="generate_script_task",
+            project_id=project_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
 @celery_app.task(bind=True, max_retries=3)
@@ -461,15 +713,24 @@ def generate_audio_task(self, project_id: str, script_content: str):
     """
     Background task to generate TTS audio.
     """
-    logger.info(f"Starting audio generation for project {project_id}")
+    started = time.monotonic()
+    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    _log_info(
+        "task.start",
+        task_name="generate_audio_task",
+        project_id=project_id,
+        attempt=attempt,
+        retries=int(getattr(self.request, "retries", 0) or 0),
+    )
     
     try:
         # 1. Generate Audio (Save to local temp first)
         temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
         temp_audio.close() # Close to let audio_gen write to it
         
+        _log_info("step.start", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
         audio_path = audio_gen.generate_audio(script_content, temp_audio.name)
-        logger.info(f"Generated audio locally at {audio_path}")
+        _log_info("step.finish", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
 
         # 2. Upload to S3 (TODO: Implement S3 Upload in Engine or return path to Backend)
         # For MVP, we might just store the path or binary in DB (not recommended for large files)
@@ -488,13 +749,25 @@ def generate_audio_task(self, project_id: str, script_content: str):
         # For now, I will just return the local path, assuming we might run render on same node 
         # OR we will add S3 upload in next step.
         
+        _log_info(
+            "task.finish",
+            task_name="generate_audio_task",
+            project_id=project_id,
+            status="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return {
             "project_id": project_id,
             "audio_path": audio_path # Local path for now
         }
 
     except Exception as e:
-        logger.error(f"Audio generation failed for project {project_id}: {str(e)}")
+        _log_exception(
+            "task.error",
+            task_name="generate_audio_task",
+            project_id=project_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
 @celery_app.task(bind=True, max_retries=3)
@@ -502,22 +775,32 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
     """
     Background task to render final video.
     """
-    logger.info(f"Starting video rendering for project {project_id}")
+    started = time.monotonic()
+    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    _log_info(
+        "task.start",
+        task_name="render_video_task",
+        project_id=project_id,
+        attempt=attempt,
+        retries=int(getattr(self.request, "retries", 0) or 0),
+    )
     
     try:
         # 1. Render Video
         temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
         temp_video.close()
         
+        _log_info("step.start", step="render.render_video", task_name="render_video_task", project_id=project_id)
         output_path = video_render.render_video(timeline_assets, audio_path, temp_video.name)
-        logger.info(f"Rendered video locally at {output_path}")
+        _log_info("step.finish", step="render.render_video", task_name="render_video_task", project_id=project_id)
 
         # 2. Upload to S3
         file_name = f"rendered_{project_id}.mp4"
         final_video_url = upload_to_s3(output_path, file_name)
-        logger.info(f"Uploaded video to {final_video_url}")
+        _log_info("step.finish", step="s3.upload_final_video", task_name="render_video_task", project_id=project_id, url_host=_url_host(final_video_url))
         
         # 3. Update Database
+        _log_info("step.start", step="db.update_project_final_url", task_name="render_video_task", project_id=project_id)
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -529,7 +812,7 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
                         WHERE id = %s
                     """
                     cursor.execute(update_query, (final_video_url, project_id))
-            logger.info(f"Updated final video URL in DB for project {project_id}")
+            _log_info("step.finish", step="db.update_project_final_url", task_name="render_video_task", project_id=project_id)
         finally:
             conn.close()
 
@@ -537,11 +820,23 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
         if os.path.exists(audio_path) and "/tmp/" in audio_path:
             os.remove(audio_path)
 
+        _log_info(
+            "task.finish",
+            task_name="render_video_task",
+            project_id=project_id,
+            status="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return {
             "project_id": project_id,
             "video_url": final_video_url
         }
 
     except Exception as e:
-        logger.error(f"Video rendering failed for project {project_id}: {str(e)}")
+        _log_exception(
+            "task.error",
+            task_name="render_video_task",
+            project_id=project_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
