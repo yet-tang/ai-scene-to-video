@@ -16,7 +16,6 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/v1/projects")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*") // Allow all for MVP dev
 public class ProjectController {
 
     private final ProjectService projectService;
