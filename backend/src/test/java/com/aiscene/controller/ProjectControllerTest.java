@@ -5,6 +5,7 @@ import com.aiscene.dto.TimelineResponse;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.service.ProjectService;
+import com.aiscene.service.StorageService;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockMultipartFile;
@@ -21,7 +22,8 @@ class ProjectControllerTest {
     @Test
     void createProject_delegatesToService() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         CreateProjectRequest req = new CreateProjectRequest();
         Project project = Project.builder().id(UUID.randomUUID()).build();
@@ -36,7 +38,8 @@ class ProjectControllerTest {
     @Test
     void getProject_delegatesToService() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
         Project project = Project.builder().id(id).build();
@@ -51,7 +54,8 @@ class ProjectControllerTest {
     @Test
     void uploadAsset_delegatesToService() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
         MockMultipartFile file = new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes());
@@ -67,7 +71,8 @@ class ProjectControllerTest {
     @Test
     void getTimeline_delegatesToService() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
         TimelineResponse timeline = TimelineResponse.builder().projectId(id.toString()).assets(List.of()).build();
@@ -82,7 +87,8 @@ class ProjectControllerTest {
     @Test
     void generateScript_returnsAccepted() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
 
@@ -95,7 +101,8 @@ class ProjectControllerTest {
     @Test
     void generateAudio_usesRequestBodyWhenProvided() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
 
@@ -108,7 +115,8 @@ class ProjectControllerTest {
     @Test
     void generateAudio_fallsBackToProjectScriptWhenNull() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
         Project project = Project.builder().id(id).scriptContent("s").build();
@@ -123,7 +131,8 @@ class ProjectControllerTest {
     @Test
     void renderVideo_returnsAccepted() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
-        ProjectController controller = new ProjectController(projectService);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
 
