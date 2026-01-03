@@ -18,7 +18,7 @@ import static org.mockito.Mockito.verify;
 class StorageServiceTest {
 
     @Test
-    void uploadFile_normalizesPublicUrlAndReturnsUrl() {
+    void uploadFile_returnsObjectUrlForCustomDomain() {
         S3Client s3Client = mock(S3Client.class);
         S3Presigner s3Presigner = mock(S3Presigner.class);
         StorageService service = new StorageService(s3Client, s3Presigner);
@@ -29,7 +29,7 @@ class StorageServiceTest {
 
         String url = service.uploadFile(file);
 
-        assertThat(url).startsWith("https://example.com/b/");
+        assertThat(url).startsWith("https://example.com/");
         verify(s3Client).putObject(any(PutObjectRequest.class), any(RequestBody.class));
     }
 
@@ -49,6 +49,21 @@ class StorageServiceTest {
     }
 
     @Test
+    void uploadFile_returnsBucketPathForR2Endpoint() {
+        S3Client s3Client = mock(S3Client.class);
+        S3Presigner s3Presigner = mock(S3Presigner.class);
+        StorageService service = new StorageService(s3Client, s3Presigner);
+        ReflectionTestUtils.setField(service, "bucketName", "ai-scene-assets");
+        ReflectionTestUtils.setField(service, "publicUrlBase", "https://abc.r2.cloudflarestorage.com");
+
+        MockMultipartFile file = new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes());
+
+        String url = service.uploadFile(file);
+
+        assertThat(url).startsWith("https://abc.r2.cloudflarestorage.com/ai-scene-assets/");
+    }
+
+    @Test
     void uploadFile_throwsOnS3Failure() {
         S3Client s3Client = mock(S3Client.class);
         S3Presigner s3Presigner = mock(S3Presigner.class);
@@ -65,4 +80,3 @@ class StorageServiceTest {
                 .hasMessageContaining("Failed to upload file");
     }
 }
-
