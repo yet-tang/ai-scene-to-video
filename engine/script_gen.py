@@ -26,29 +26,57 @@ class ScriptGenerator:
 
         # 2. Prompt Engineering
         prompt = f"""
-        你是一个专业的房产短视频脚本编剧。请根据以下房源信息和视频画面顺序，撰写一段吸引人的口播解说词。
-        
-        {context_str}
+# Role
+你是一位专业的房产短视频解说达人。你的声音将被直接录制，因此你的输出必须是**纯粹的口语文本**，不能包含任何非朗读内容。
 
-        要求：
-        1. 语气热情、专业、有感染力。
-        2. 严格按照视频片段的顺序来写，确保画音同步。
-        3. 总时长控制在45-60秒左右（约200-250字）。
-        4. 不需要分镜头描述，只需要输出纯文本的解说词内容。
-        5. 开头要有吸引力，结尾要有引导（如“欢迎预约看房”）。
-        """
+# Context Data
+以下是房源信息和视频画面的分镜描述流：
+{context_str}
+
+# Task
+根据上述房源信息和视频画面顺序，撰写一段连贯、引人入胜的**口语解说词**。
+
+# Critical Constraints (MUST FOLLOW)
+1. **格式清洗 (Format Purge)**: 输出结果将被直接发送给 TTS 引擎。**严禁**输出 JSON、Markdown、标题、前缀（如 "Script:"）、分镜标记（如 "[Scene 1]"）或任何非解说词的解释性文字。
+2. **纯文本流**: 只输出要朗读的内容本身。
+3. **视觉锚定**: 必须严格按照“视频片段顺序”来推进解说。解说内容必须与画面发生的动作实时对应。
+4. **口语拟真 (Oral Simulation)**:
+    - 拒绝书面语，拒绝销售套话（如“尊贵”、“尽享”）。
+    - 像给朋友介绍房子一样，自然、真诚。
+    - 适当加入口语填充词（如“那个...”、“哎你看...”、“说实话...”）来增加真实感。
+    - 巧妙利用标点符号控制节奏：使用逗号“，”表示短停顿，使用省略号“...”表示观察时的长停顿或悬念。
+5. **时长控制**: 45-60秒左右（约200-250字）。
+
+# Tone & Style
+- 沉浸感强，像是朋友在耳边低语。
+- 情感充沛，不要像机器人一样棒读。
+
+# Output Example (Format Reference ONLY)
+(正确): 哎，今儿带你们看个特别逗的房子... 进门这个玄关，说实话，有点窄，但你往里走... 豁！看见没？这大落地窗，直接把我看愣了... 
+(错误): Script: 哎，今儿带你们看个特别逗的房子... 
+(错误): 大家好，我是AI助手，以下是解说词...
+
+# Action
+现在，请直接开始解说，不要说任何废话：
+"""
 
         messages = [
-            {'role': 'system', 'content': 'You are a helpful assistant.'},
+            {'role': 'system', 'content': 'You are a professional video script writer.'},
             {'role': 'user', 'content': prompt}
         ]
 
         # 3. Call Qwen-Plus
         response = Generation.call(model='qwen-plus',
                                    messages=messages,
-                                   result_format='message')
+                                   result_format='message',
+                                   temperature=0.7)  # Increase creativity for colloquial style
 
         if response.status_code == HTTPStatus.OK:
-            return response.output.choices[0].message.content
+            content = response.output.choices[0].message.content
+            # Post-processing to clean up common artifacts
+            clean_script = content.strip().strip('"').strip("'")
+            if clean_script.lower().startswith("script:"):
+                clean_script = clean_script[7:].strip()
+            return clean_script
         else:
             raise Exception(f"Script generation failed: {response.message}")
