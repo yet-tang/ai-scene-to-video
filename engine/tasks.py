@@ -207,6 +207,75 @@ def _coerce_segments(raw: dict) -> list[dict]:
     normalized.sort(key=lambda x: x["start_sec"])
     return normalized
 
+def _complete_segments_to_full_duration(segments: list[dict], total_duration_sec: float, eps: float = 0.05) -> list[dict]:
+    try:
+        total = float(total_duration_sec or 0.0)
+    except Exception:
+        total = 0.0
+    if total <= 0.0:
+        return []
+
+    cleaned: list[dict] = []
+    for s in segments or []:
+        if not isinstance(s, dict):
+            continue
+        try:
+            start = float(s.get("start_sec"))
+            end = float(s.get("end_sec"))
+        except Exception:
+            continue
+        if end <= start:
+            continue
+        start = max(0.0, min(start, total))
+        end = max(0.0, min(end, total))
+        if end <= start:
+            continue
+        cleaned.append({**s, "start_sec": start, "end_sec": end})
+
+    if not cleaned:
+        return [{"start_sec": 0.0, "end_sec": total, "scene": "其他", "features": "", "score": 0.0}]
+
+    cleaned.sort(key=lambda x: float(x.get("start_sec", 0.0)))
+
+    cleaned[0]["start_sec"] = 0.0
+    for i in range(len(cleaned) - 1):
+        cur = cleaned[i]
+        nxt = cleaned[i + 1]
+        cur_start = float(cur["start_sec"])
+        cur_end = float(cur["end_sec"])
+        nxt_start = float(nxt["start_sec"])
+
+        if nxt_start > cur_end + eps:
+            cur["end_sec"] = nxt_start
+            cur_end = nxt_start
+
+        if nxt_start < cur_end - eps:
+            nxt["start_sec"] = cur_end
+
+        if float(cur["end_sec"]) <= cur_start:
+            cur["end_sec"] = min(total, cur_start + eps)
+
+    cleaned[-1]["end_sec"] = total
+
+    out = []
+    for s in cleaned:
+        try:
+            start = float(s["start_sec"])
+            end = float(s["end_sec"])
+        except Exception:
+            continue
+        start = max(0.0, min(start, total))
+        end = max(0.0, min(end, total))
+        if end > start + eps:
+            out.append({**s, "start_sec": start, "end_sec": end})
+
+    if not out:
+        return [{"start_sec": 0.0, "end_sec": total, "scene": "其他", "features": "", "score": 0.0}]
+
+    out[0]["start_sec"] = 0.0
+    out[-1]["end_sec"] = total
+    return out
+
 def _advance_project_status(project_id: str):
     started = time.monotonic()
     conn = psycopg2.connect(Config.DB_DSN)
@@ -287,6 +356,18 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                 for s in segments
             ]
             segments = [s for s in segments if s["end_sec"] > s["start_sec"]]
+            before_total = sum(float(s["end_sec"]) - float(s["start_sec"]) for s in segments) if segments else 0.0
+            segments = _complete_segments_to_full_duration(segments, float(video.duration or 0.0))
+            after_total = sum(float(s["end_sec"]) - float(s["start_sec"]) for s in segments) if segments else 0.0
+            _log_info(
+                "split.segments.normalized",
+                project_id=project_id,
+                asset_id=asset_id,
+                segments_count=int(len(segments)),
+                sum_duration_before_sec=float(before_total),
+                sum_duration_after_sec=float(after_total),
+                video_duration_sec=float(video.duration or 0.0),
+            )
 
             conn = psycopg2.connect(Config.DB_DSN)
             try:

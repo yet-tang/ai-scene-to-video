@@ -8,7 +8,6 @@
       @click-left="router.back()"
     />
 
-    <!-- 概览信息 -->
     <div class="overview-card">
       <div class="stat-item">
         <div class="value">{{ assets.length }}</div>
@@ -24,7 +23,6 @@
       </div>
     </div>
 
-    <!-- 拖拽列表 -->
     <div class="timeline-list">
       <div class="section-header">
         <span class="title">视频片段排序</span>
@@ -41,19 +39,19 @@
       >
         <template #item="{ element, index }">
           <div class="timeline-item">
-            <!-- 1. 视频单独一行，可预览 -->
-            <div class="thumbnail-wrapper">
+            <div class="thumbnail-wrapper" :class="{ portrait: isPortrait(element) }">
               <div class="index-badge">{{ index + 1 }}</div>
               <video 
                 :src="element.url" 
                 controls 
                 class="video-preview"
                 preload="metadata"
+                playsinline
+                @loadedmetadata="onVideoLoaded($event, element)"
               ></video>
               <div class="duration-badge">{{ Math.round(element.duration) }}s</div>
             </div>
             
-            <!-- 2. 其他内容下铺 -->
             <div class="item-content">
               <div class="content-top">
                 <div class="scene-info" @click="openScenePicker(index)">
@@ -80,7 +78,6 @@
                 </div>
               </div>
 
-              <!-- 3. 每段切片都有脚本，可修改 -->
               <div class="script-box">
                 <van-field
                     v-model="element.script"
@@ -101,7 +98,6 @@
       </div>
     </div>
 
-    <!-- 底部按钮 -->
     <div class="bottom-action-bar">
       <div class="action-summary">
         预计生成时长: {{ Math.ceil(assets.reduce((s, i) => s + i.duration, 0) / 60 * 2) }} 分钟
@@ -131,7 +127,6 @@
       </div>
     </div>
 
-    <!-- 场景修改弹窗 -->
     <van-popup v-model:show="showPicker" position="bottom" round>
       <van-picker
         title="修正场景标签"
@@ -151,9 +146,9 @@ import { projectApi } from '../api/project'
 import draggable from 'vuedraggable'
 import { showToast } from 'vant'
 
-// Extend Asset type locally to include script
 interface UIAsset extends Asset {
     script: string
+    previewAspect?: number
 }
 
 const route = useRoute()
@@ -164,10 +159,10 @@ const projectId = route.params.id as string
 const assets = ref<UIAsset[]>([])
 const isScriptGenerating = ref(false)
 const isRendering = ref(false)
-let pollTimer: any = null
+let timelinePollTimer: any = null
+let scriptPollTimer: any = null
 const analysisDone = ref(false)
 
-// 场景选择
 const showPicker = ref(false)
 const editingIndex = ref(-1)
 const sceneOptions = [
@@ -193,11 +188,12 @@ onMounted(async () => {
   }
 
   await loadData()
-  startPolling()
+  startTimelinePolling()
 })
 
 onUnmounted(() => {
-  stopPolling()
+  stopTimelinePolling()
+  stopScriptPolling()
 })
 
 const loadData = async () => {
@@ -205,11 +201,9 @@ const loadData = async () => {
     await projectStore.fetchProject(projectId)
     await projectStore.fetchTimeline(projectId)
     
-    // Initial Load
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
     
-    // Distribute script if this is first load and assets have no script
     const distributedScripts = distributeScript(globalScript, storeAssets.length)
     
     assets.value = storeAssets.map((a, i) => ({
@@ -222,21 +216,17 @@ const loadData = async () => {
   }
 }
 
-// Simple heuristic to split script into N parts
 const distributeScript = (text: string, count: number): string[] => {
+    if (count <= 0) return []
     if (!text) return new Array(count).fill('')
     
-    // Try to split by common punctuation
-    // Match sentences ending with punctuation
     const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
     
     if (sentences.length <= count) {
-        // If fewer sentences than clips, fill 1:1 then empty
         const res = new Array(count).fill('')
         sentences.forEach((s, i) => res[i] = s)
         return res
     } else {
-        // If more sentences than clips, combine them roughly evenly
         const res = new Array(count).fill('')
         const perClip = Math.ceil(sentences.length / count)
         for (let i = 0; i < count; i++) {
@@ -246,37 +236,38 @@ const distributeScript = (text: string, count: number): string[] => {
     }
 }
 
-const startPolling = () => {
-  stopPolling()
-  pollTimer = setInterval(async () => {
+const onVideoLoaded = (evt: Event, asset: UIAsset) => {
+    const el = evt.target as HTMLVideoElement | null
+    if (!el || !el.videoWidth || !el.videoHeight) return
+    asset.previewAspect = el.videoWidth / el.videoHeight
+}
+
+const isPortrait = (asset: UIAsset) => {
+    if (asset.previewAspect == null) return false
+    return asset.previewAspect < 1
+}
+
+const startTimelinePolling = () => {
+  stopTimelinePolling()
+  timelinePollTimer = setInterval(async () => {
     await projectStore.fetchTimeline(projectId)
     const newAssets = projectStore.currentProject.assets
     
-    // Merge logic to preserve local script edits
-    // Assume ID match
     let hasUpdate = false
     const mergedAssets: UIAsset[] = []
     
-    // We map newAssets to ensure order from backend (or should we trust local order?)
-    // If we are dragging, we might have local order diff from backend.
-    // But this poll is for "AI Analysis Status".
-    // Strategy: Map over current local assets, update their status from newAssets.
-    // If newAssets has new items (unlikely unless AI found more), add them.
-    
-    // Simplification: Re-build assets list but keep script from old list
     newAssets.forEach(newA => {
         const oldA = assets.value.find(a => a.id === newA.id)
         if (oldA) {
-            // Check for updates
             if (!oldA.sceneLabel && newA.sceneLabel) {
                 hasUpdate = true
             }
             mergedAssets.push({
                 ...newA,
-                script: oldA.script // Preserve script
+                script: oldA.script,
+                previewAspect: oldA.previewAspect
             })
         } else {
-            // New asset found
             mergedAssets.push({
                 ...newA,
                 script: ''
@@ -285,7 +276,6 @@ const startPolling = () => {
         }
     })
     
-    // Only update if length changed or we found updates, to avoid re-rendering too much
     if (hasUpdate || newAssets.length !== assets.value.length) {
          assets.value = mergedAssets
          if (hasUpdate) showToast('AI 分析已更新')
@@ -295,32 +285,45 @@ const startPolling = () => {
       const done = assets.value.length > 0 && assets.value.every(a => !!a.sceneLabel)
       if (done) {
         analysisDone.value = true
-        stopPolling()
+        stopTimelinePolling()
         showToast('AI 分析完成')
       }
-    }
-    
-    // Check script generation status
-    if (isScriptGenerating.value) {
-        await projectStore.fetchProject(projectId)
-        if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
-            const fullScript = projectStore.currentProject.script
-            // Distribute new script
-            const parts = distributeScript(fullScript, assets.value.length)
-            assets.value.forEach((a, i) => {
-                if (parts[i]) a.script = parts[i]
-            })
-            
-            isScriptGenerating.value = false
-            showToast('脚本生成完成')
-        }
     }
 
   }, 3000)
 }
 
-const stopPolling = () => {
-  if (pollTimer) clearInterval(pollTimer)
+const stopTimelinePolling = () => {
+  if (timelinePollTimer) clearInterval(timelinePollTimer)
+  timelinePollTimer = null
+}
+
+const startScriptPolling = () => {
+  stopScriptPolling()
+  scriptPollTimer = setInterval(async () => {
+    if (!isScriptGenerating.value) {
+      stopScriptPolling()
+      return
+    }
+
+    await projectStore.fetchProject(projectId)
+    if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
+      const fullScript = projectStore.currentProject.script
+      const parts = distributeScript(fullScript, assets.value.length)
+      assets.value.forEach((a, i) => {
+        if (parts[i]) a.script = parts[i]
+      })
+
+      isScriptGenerating.value = false
+      stopScriptPolling()
+      showToast('脚本生成完成')
+    }
+  }, 1500)
+}
+
+const stopScriptPolling = () => {
+  if (scriptPollTimer) clearInterval(scriptPollTimer)
+  scriptPollTimer = null
 }
 
 const totalDuration = computed(() => {
@@ -355,14 +358,13 @@ const onDragEnd = async () => {
   
   try {
     await Promise.all(updates)
-    // Sync store (need to cast back to Asset)
     projectStore.currentProject.assets = assets.value
   } catch (e) {
     showToast('排序保存失败')
   }
 }
 
-const removeAsset = (index: number) => {
+const removeAsset = (_index: number) => {
   showToast('暂不支持删除片段')
 }
 
@@ -390,15 +392,16 @@ const onGenerateScript = async () => {
     isScriptGenerating.value = true
     try {
         await projectApi.generateScript(projectId)
+        startScriptPolling()
         showToast('正在生成解说词...')
     } catch (e) {
         isScriptGenerating.value = false
+        stopScriptPolling()
         showToast('请求失败')
     }
 }
 
 const onGenerateVideo = async () => {
-  // Combine scripts
   const combinedScript = assets.value.map(a => a.script).join('\n')
   
   if (!combinedScript.trim()) {
@@ -408,9 +411,7 @@ const onGenerateVideo = async () => {
   
   isRendering.value = true
   try {
-      // 1. Generate Audio with combined script
       await projectApi.generateAudio(projectId, combinedScript)
-      // 2. Render Video
       await projectApi.renderVideo(projectId)
       
       router.push(`/result/${projectId}`)
@@ -456,7 +457,6 @@ const onGenerateVideo = async () => {
   margin-top: 4px;
 }
 
-/* 4. Remove huge margins -> padding: 0 */
 .timeline-list {
   padding: 0;
 }
@@ -484,7 +484,7 @@ const onGenerateVideo = async () => {
   background: #fff;
   margin-bottom: 12px;
   display: flex;
-  flex-direction: column; /* Video on separate line */
+  flex-direction: column;
   box-shadow: 0 2px 4px rgba(0,0,0,0.02);
   position: relative;
   transition: all 0.2s;
@@ -497,9 +497,16 @@ const onGenerateVideo = async () => {
 
 .thumbnail-wrapper {
   width: 100%;
-  aspect-ratio: 16/9; /* Full width preview */
+  height: clamp(180px, 28vw, 260px);
   background: #000;
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbnail-wrapper.portrait {
+  height: clamp(180px, 28vw, 260px);
 }
 
 .video-preview {
@@ -507,6 +514,11 @@ const onGenerateVideo = async () => {
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+.thumbnail-wrapper.portrait .video-preview {
+  width: auto;
+  max-width: 100%;
 }
 
 .index-badge {
