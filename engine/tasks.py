@@ -909,7 +909,16 @@ def generate_audio_task(self, project_id: str, script_content: str):
         except Exception:
             pass
         
-        _log_info("step.start", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
+        _log_info(
+            "step.start",
+            step="tts.generate_audio",
+            task_name="generate_audio_task",
+            project_id=project_id,
+            tts_engine=Config.TTS_ENGINE,
+            tts_model=Config.TTS_MODEL,
+            voice=Config.TTS_VOICE,
+            tts_enable_ssml=bool(Config.TTS_ENABLE_SSML),
+        )
         audio_path = audio_gen.generate_audio(script_content, output_path)
         _log_info("step.finish", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
 

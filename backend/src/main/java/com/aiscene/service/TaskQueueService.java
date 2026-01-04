@@ -96,9 +96,10 @@ public class TaskQueueService {
             headers.put("kwargsrepr", "{}");
 
             String requestId = MDC.get("request_id");
-            if (requestId != null) {
-                headers.put("request_id", requestId);
+            if (requestId == null || requestId.isEmpty()) {
+                requestId = UUID.randomUUID().toString();
             }
+            headers.put("request_id", requestId);
             String userId = MDC.get("user_id");
             if (userId != null) {
                 headers.put("user_id", userId);
