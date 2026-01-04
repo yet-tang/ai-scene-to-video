@@ -8,6 +8,39 @@
       @click-left="router.back()"
     />
 
+    <div class="process-card" :class="{ done: analysisDone, error: timelinePollHasError }">
+      <div class="process-top">
+        <div class="process-title">
+          <van-loading v-if="processBusy" size="16" type="spinner" color="#1989fa" />
+          <van-icon v-else name="passed" color="#07c160" />
+          <span class="process-title-text">{{ processTitle }}</span>
+        </div>
+        <div class="process-actions">
+          <van-button
+            size="small"
+            plain
+            type="primary"
+            :loading="timelinePollInFlight"
+            @click="manualRefresh"
+          >
+            刷新
+          </van-button>
+        </div>
+      </div>
+
+      <div class="process-progress" v-if="processShowProgress">
+        <van-progress :percentage="analysisProgressPercent" stroke-width="8" />
+        <div class="process-sub">
+          <span>{{ analysisProgressText }}</span>
+          <span class="process-meta">{{ timelinePollMeta }}</span>
+        </div>
+      </div>
+
+      <div class="process-error" v-if="timelinePollHasError">
+        {{ timelinePollErrorText }}
+      </div>
+    </div>
+
     <div class="overview-card">
       <div class="stat-item">
         <div class="value">{{ assets.length }}</div>
@@ -28,9 +61,14 @@
         <span class="title">视频片段排序</span>
         <span class="sub">长按拖拽调整顺序</span>
       </div>
-      
-      <draggable 
-        v-model="assets" 
+
+      <div class="timeline-skeleton" v-if="assets.length === 0">
+        <van-skeleton title :row="6" />
+      </div>
+
+      <draggable
+        v-else
+        v-model="assets"
         item-key="id"
         handle=".drag-handle"
         @end="onDragEnd"
@@ -41,9 +79,9 @@
           <div class="timeline-item">
             <div class="thumbnail-wrapper" :class="{ portrait: isPortrait(element) }">
               <div class="index-badge">{{ index + 1 }}</div>
-              <video 
-                :src="element.url" 
-                controls 
+              <video
+                :src="element.url"
+                controls
                 class="video-preview"
                 preload="metadata"
                 playsinline
@@ -51,24 +89,24 @@
               ></video>
               <div class="duration-badge">{{ Math.round(element.duration) }}s</div>
             </div>
-            
+
             <div class="item-content">
               <div class="content-top">
                 <div class="scene-info" @click="openScenePicker(index)">
                   <span class="scene-label">{{ element.userLabel || '未知场景' }}</span>
                   <van-icon name="edit" class="edit-icon" />
                 </div>
-                
+
                 <div class="actions">
-                    <div class="delete-btn" @click.stop="removeAsset(index)">
-                        <van-icon name="delete-o" size="18" color="#c8c9cc" />
-                    </div>
-                    <div class="drag-handle">
-                        <van-icon name="bars" size="20" color="#c8c9cc" />
-                    </div>
+                  <div class="delete-btn" @click.stop="removeAsset(index)">
+                    <van-icon name="delete-o" size="18" color="#c8c9cc" />
+                  </div>
+                  <div class="drag-handle">
+                    <van-icon name="bars" size="20" color="#c8c9cc" />
+                  </div>
                 </div>
               </div>
-              
+
               <div class="content-middle">
                 <div class="ai-tag" v-if="element.sceneLabel">
                   AI: {{ element.sceneLabel }}
@@ -80,12 +118,12 @@
 
               <div class="script-box">
                 <van-field
-                    v-model="element.script"
-                    rows="2"
-                    autosize
-                    type="textarea"
-                    placeholder="输入该片段的解说词..."
-                    class="clip-script-input"
+                  v-model="element.script"
+                  rows="2"
+                  autosize
+                  type="textarea"
+                  placeholder="输入该片段的解说词..."
+                  class="clip-script-input"
                 />
               </div>
             </div>
@@ -135,6 +173,14 @@
         @cancel="showPicker = false"
       />
     </van-popup>
+
+    <van-overlay :show="isRendering" class="render-overlay">
+      <div class="render-overlay-content">
+        <van-loading size="42" type="spinner" color="#1989fa" />
+        <div class="render-overlay-title">后台正在提交合成任务</div>
+        <div class="render-overlay-sub">语音生成、剪辑与字幕合成会在结果页持续更新</div>
+      </div>
+    </van-overlay>
   </div>
 </template>
 
@@ -162,6 +208,16 @@ const isRendering = ref(false)
 let timelinePollTimer: any = null
 let scriptPollTimer: any = null
 const analysisDone = ref(false)
+
+const timelinePollActive = ref(false)
+const timelinePollInFlight = ref(false)
+const timelinePollCount = ref(0)
+const timelinePollLastOkAt = ref<number | null>(null)
+const timelinePollErrorCount = ref(0)
+const timelinePollLastErrorAt = ref<number | null>(null)
+const timelinePollLastErrorMessage = ref('')
+const timelinePollLastUpdateAt = ref<number | null>(null)
+const timelinePollLastUpdateToastAt = ref(0)
 
 const showPicker = ref(false)
 const editingIndex = ref(-1)
@@ -216,6 +272,75 @@ const loadData = async () => {
   }
 }
 
+const formatClock = (ts: number | null) => {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mm = d.getMinutes().toString().padStart(2, '0')
+  const ss = d.getSeconds().toString().padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
+
+const projectStatus = computed(() => projectStore.currentProject.status || '')
+
+const analysisLabeledCount = computed(() => assets.value.filter(a => !!a.sceneLabel).length)
+const analysisTotalCount = computed(() => assets.value.length)
+const analysisProgressPercent = computed(() => {
+  const total = analysisTotalCount.value
+  if (analysisDone.value) return 100
+  if (total <= 0) return projectStatus.value === 'ANALYZING' ? 8 : 0
+  const pct = Math.floor((analysisLabeledCount.value / total) * 100)
+  return Math.max(0, Math.min(99, pct))
+})
+
+const analysisProgressText = computed(() => {
+  if (analysisDone.value) return `已识别 ${analysisTotalCount.value} / ${analysisTotalCount.value}`
+  if (analysisTotalCount.value <= 0) return '正在创建片段…'
+  return `已识别 ${analysisLabeledCount.value} / ${analysisTotalCount.value}`
+})
+
+const timelinePollHasError = computed(() => timelinePollErrorCount.value > 0 && !!timelinePollLastErrorAt.value)
+const timelinePollErrorText = computed(() => {
+  const at = formatClock(timelinePollLastErrorAt.value)
+  const msg = timelinePollLastErrorMessage.value
+  return `最近一次刷新失败（${at}），将自动重试：${msg || '网络异常'}`
+})
+
+const timelinePollMeta = computed(() => {
+  const okAt = formatClock(timelinePollLastOkAt.value)
+  const updAt = formatClock(timelinePollLastUpdateAt.value)
+  const parts = []
+  if (timelinePollActive.value) parts.push(`轮询中 · 第 ${timelinePollCount.value} 次`)
+  if (updAt) parts.push(`更新 ${updAt}`)
+  if (okAt) parts.push(`刷新 ${okAt}`)
+  return parts.join(' · ')
+})
+
+const processBusy = computed(() => {
+  if (isRendering.value) return true
+  if (isScriptGenerating.value) return true
+  if (!analysisDone.value) return true
+  return false
+})
+
+const processTitle = computed(() => {
+  if (isRendering.value) return '正在提交合成任务'
+  if (projectStatus.value === 'RENDERING') return '正在合成视频'
+  if (projectStatus.value === 'AUDIO_GENERATING') return '正在生成语音'
+  if (isScriptGenerating.value || projectStatus.value === 'SCRIPT_GENERATING') return '正在生成解说词'
+  if (!analysisDone.value) {
+    if (projectStatus.value === 'ANALYZING') return '后台正在智能切片与识别'
+    return '正在准备智能分段'
+  }
+  return '分析完成，可开始确认与编辑'
+})
+
+const processShowProgress = computed(() => {
+  if (isRendering.value) return false
+  if (isScriptGenerating.value || projectStatus.value === 'SCRIPT_GENERATING') return false
+  return true
+})
+
 const distributeScript = (text: string, count: number): string[] => {
     if (count <= 0) return []
     if (!text) return new Array(count).fill('')
@@ -247,48 +372,90 @@ const isPortrait = (asset: UIAsset) => {
     return asset.previewAspect < 1
 }
 
+const mergeTimelineAssets = (newAssets: Asset[]) => {
+  let hasUpdate = false
+  const mergedAssets: UIAsset[] = []
+
+  newAssets.forEach(newA => {
+    const oldA = assets.value.find(a => a.id === newA.id)
+    if (oldA) {
+      if (!oldA.sceneLabel && newA.sceneLabel) {
+        hasUpdate = true
+      }
+      mergedAssets.push({
+        ...newA,
+        script: oldA.script,
+        previewAspect: oldA.previewAspect
+      })
+    } else {
+      mergedAssets.push({
+        ...newA,
+        script: ''
+      })
+      hasUpdate = true
+    }
+  })
+
+  if (hasUpdate || newAssets.length !== assets.value.length) {
+    assets.value = mergedAssets
+    timelinePollLastUpdateAt.value = Date.now()
+    const now = Date.now()
+    if (hasUpdate && now - timelinePollLastUpdateToastAt.value > 8000) {
+      showToast('AI 分析结果已更新')
+      timelinePollLastUpdateToastAt.value = now
+    }
+  }
+
+  if (!analysisDone.value) {
+    const done = assets.value.length > 0 && assets.value.every(a => !!a.sceneLabel)
+    if (done) {
+      analysisDone.value = true
+      stopTimelinePolling()
+      showToast('AI 分析完成')
+    }
+  }
+}
+
+const pollTimelineOnce = async () => {
+  if (timelinePollInFlight.value) return
+  timelinePollInFlight.value = true
+  timelinePollCount.value += 1
+  try {
+    await Promise.all([
+      projectStore.fetchTimeline(projectId),
+      projectStore.fetchProject(projectId)
+    ])
+
+    timelinePollLastOkAt.value = Date.now()
+    timelinePollErrorCount.value = 0
+    timelinePollLastErrorAt.value = null
+    timelinePollLastErrorMessage.value = ''
+
+    const newAssets = projectStore.currentProject.assets
+    mergeTimelineAssets(newAssets)
+  } catch (e: any) {
+    timelinePollErrorCount.value += 1
+    timelinePollLastErrorAt.value = Date.now()
+    timelinePollLastErrorMessage.value = (e && (e.message || e.toString())) || ''
+
+    if (timelinePollErrorCount.value === 1) {
+      showToast('刷新失败，将自动重试')
+    }
+  } finally {
+    timelinePollInFlight.value = false
+  }
+}
+
+const manualRefresh = async () => {
+  await pollTimelineOnce()
+}
+
 const startTimelinePolling = () => {
   stopTimelinePolling()
+  timelinePollActive.value = true
+  pollTimelineOnce()
   timelinePollTimer = setInterval(async () => {
-    await projectStore.fetchTimeline(projectId)
-    const newAssets = projectStore.currentProject.assets
-    
-    let hasUpdate = false
-    const mergedAssets: UIAsset[] = []
-    
-    newAssets.forEach(newA => {
-        const oldA = assets.value.find(a => a.id === newA.id)
-        if (oldA) {
-            if (!oldA.sceneLabel && newA.sceneLabel) {
-                hasUpdate = true
-            }
-            mergedAssets.push({
-                ...newA,
-                script: oldA.script,
-                previewAspect: oldA.previewAspect
-            })
-        } else {
-            mergedAssets.push({
-                ...newA,
-                script: ''
-            })
-            hasUpdate = true
-        }
-    })
-    
-    if (hasUpdate || newAssets.length !== assets.value.length) {
-         assets.value = mergedAssets
-         if (hasUpdate) showToast('AI 分析已更新')
-    }
-
-    if (!analysisDone.value) {
-      const done = assets.value.length > 0 && assets.value.every(a => !!a.sceneLabel)
-      if (done) {
-        analysisDone.value = true
-        stopTimelinePolling()
-        showToast('AI 分析完成')
-      }
-    }
+    await pollTimelineOnce()
 
   }, 3000)
 }
@@ -296,6 +463,7 @@ const startTimelinePolling = () => {
 const stopTimelinePolling = () => {
   if (timelinePollTimer) clearInterval(timelinePollTimer)
   timelinePollTimer = null
+  timelinePollActive.value = false
 }
 
 const startScriptPolling = () => {
@@ -359,6 +527,7 @@ const onDragEnd = async () => {
   try {
     await Promise.all(updates)
     projectStore.currentProject.assets = assets.value
+    showToast('排序已保存')
   } catch (e) {
     showToast('排序保存失败')
   }
@@ -393,7 +562,7 @@ const onGenerateScript = async () => {
     try {
         await projectApi.generateScript(projectId)
         startScriptPolling()
-        showToast('正在生成解说词...')
+        showToast('已提交生成解说词任务')
     } catch (e) {
         isScriptGenerating.value = false
         stopScriptPolling()
@@ -438,6 +607,83 @@ const onGenerateVideo = async () => {
   align-items: center;
   justify-content: space-around;
   box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+}
+
+.process-card {
+  margin: 12px 16px;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  border: 1px solid #ebedf0;
+}
+
+.process-card.done {
+  border-color: rgba(7, 193, 96, 0.25);
+}
+
+.process-card.error {
+  border-color: rgba(238, 10, 36, 0.25);
+}
+
+.process-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.process-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.process-title-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #323233;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.process-actions {
+  flex-shrink: 0;
+}
+
+.process-progress {
+  margin-top: 10px;
+}
+
+.process-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #475569;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.process-meta {
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.process-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #ee0a24;
+  line-height: 1.4;
+}
+
+.timeline-skeleton {
+  margin: 0 16px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
 }
 
 .stat-item {
@@ -574,6 +820,7 @@ const onGenerateVideo = async () => {
 .scene-info {
   display: flex;
   align-items: center;
+  cursor: pointer;
 }
 
 .scene-label {
@@ -631,6 +878,7 @@ const onGenerateVideo = async () => {
 
 .delete-btn {
   padding: 4px;
+  cursor: pointer;
 }
 
 .add-clip-btn {
@@ -642,6 +890,38 @@ const onGenerateVideo = async () => {
   font-weight: 500;
   margin: 16px;
   border-radius: 8px;
+  cursor: pointer;
+}
+
+.render-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.render-overlay-content {
+  width: min(320px, calc(100vw - 48px));
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 12px;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+}
+
+.render-overlay-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323233;
+}
+
+.render-overlay-sub {
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+  line-height: 1.5;
 }
 
 .bottom-action-bar {

@@ -165,6 +165,7 @@ public class ProjectService {
         // Optional: Update script content in DB if user edited it
         Project project = getProject(projectId);
         project.setScriptContent(scriptContent);
+        project.setStatus(ProjectStatus.AUDIO_GENERATING);
         projectRepository.save(project);
         
         taskQueueService.submitAudioGenerationTask(projectId, scriptContent);
@@ -207,6 +208,8 @@ public class ProjectService {
         // BUT, since we are in `ProjectService` now, let's just finish this method and then I'll go fix Engine task.
         
         String audioPath = "/tmp/" + projectId + ".mp3"; // Hacky convention for MVP if we assume shared tmp or re-download
+        project.setStatus(ProjectStatus.RENDERING);
+        projectRepository.save(project);
         
         taskQueueService.submitRenderVideoTask(projectId, timelineAssets, audioPath);
     }

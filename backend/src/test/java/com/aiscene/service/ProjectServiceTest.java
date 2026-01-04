@@ -155,6 +155,7 @@ class ProjectServiceTest {
         ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(captor.capture());
         assertThat(captor.getValue().getScriptContent()).isEqualTo("s");
+        assertThat(captor.getValue().getStatus()).isEqualTo(ProjectStatus.AUDIO_GENERATING);
         verify(taskQueueService).submitAudioGenerationTask(projectId, "s");
     }
 
@@ -163,6 +164,7 @@ class ProjectServiceTest {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Asset a1 = Asset.builder().ossUrl("u1").duration(1.0).build();
         Asset a2 = Asset.builder().ossUrl("u2").duration(2.0).build();
@@ -177,6 +179,9 @@ class ProjectServiceTest {
         Map<?, ?> first = (Map<?, ?>) payload.get(0);
         assertThat(first.get("oss_url")).isEqualTo("u1");
         assertThat(first.get("duration")).isEqualTo(1.0);
+        ArgumentCaptor<Project> projectCaptor = ArgumentCaptor.forClass(Project.class);
+        verify(projectRepository).save(projectCaptor.capture());
+        assertThat(projectCaptor.getValue().getStatus()).isEqualTo(ProjectStatus.RENDERING);
     }
 
     @Test

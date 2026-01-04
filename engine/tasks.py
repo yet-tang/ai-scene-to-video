@@ -14,6 +14,7 @@ import uuid
 import urllib.request
 import time
 from urllib.parse import urlparse
+from celery.exceptions import Retry
 
 # Configure logging
 # Logging is configured in worker.py via signals
@@ -319,6 +320,54 @@ def _advance_project_status(project_id: str):
             status="ok",
             **({"remaining_assets": remaining} if remaining is not None else {}),
         )
+    finally:
+        conn.close()
+
+def _set_project_status(project_id: str, status: str, *, skip_if_status_in: tuple[str, ...] | None = None):
+    started = time.monotonic()
+    conn = psycopg2.connect(Config.DB_DSN)
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                if skip_if_status_in:
+                    placeholders = ",".join(["%s"] * len(skip_if_status_in))
+                    cursor.execute(
+                        f"""
+                        UPDATE projects
+                        SET status = %s
+                        WHERE id = %s
+                          AND (status IS NULL OR status NOT IN ({placeholders}))
+                        """,
+                        (status, project_id, *skip_if_status_in),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE projects
+                        SET status = %s
+                        WHERE id = %s
+                        """,
+                        (status, project_id),
+                    )
+        _log_info(
+            "db.project_status.set",
+            project_id=project_id,
+            status_value=status,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    finally:
+        conn.close()
+
+def _get_project_status(project_id: str) -> str | None:
+    conn = psycopg2.connect(Config.DB_DSN)
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT status FROM projects WHERE id = %s", (project_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return row[0]
     finally:
         conn.close()
 
@@ -851,13 +900,20 @@ def generate_audio_task(self, project_id: str, script_content: str):
     )
     
     try:
-        # 1. Generate Audio (Save to local temp first)
-        temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-        temp_audio.close() # Close to let audio_gen write to it
+        _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("RENDERING", "COMPLETED"))
+
+        output_path = f"/tmp/{project_id}.mp3"
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
         
         _log_info("step.start", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
-        audio_path = audio_gen.generate_audio(script_content, temp_audio.name)
+        audio_path = audio_gen.generate_audio(script_content, output_path)
         _log_info("step.finish", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
+
+        _set_project_status(project_id, "AUDIO_GENERATED", skip_if_status_in=("RENDERING", "COMPLETED"))
 
         # 2. Upload to S3 (TODO: Implement S3 Upload in Engine or return path to Backend)
         # For MVP, we might just store the path or binary in DB (not recommended for large files)
@@ -889,13 +945,20 @@ def generate_audio_task(self, project_id: str, script_content: str):
         }
 
     except Exception as e:
+        if isinstance(e, Retry):
+            raise
         _log_exception(
             "task.error",
             task_name="generate_audio_task",
             project_id=project_id,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        if retries >= max_retries:
+            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+            raise
+        raise self.retry(exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
 def render_video_task(self, project_id: str, timeline_assets: list, audio_path: str):
@@ -913,6 +976,16 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
     )
     
     try:
+        _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
+
+        if audio_path:
+            status = _get_project_status(project_id)
+            if status == "FAILED":
+                raise RuntimeError("project already failed")
+            if (not os.path.exists(audio_path)) or (os.path.getsize(audio_path) <= 0):
+                retries = int(getattr(self.request, "retries", 0) or 0)
+                raise self.retry(exc=RuntimeError("audio not ready"), countdown=2 ** retries)
+
         # 1. Render Video
         temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
         temp_video.close()
@@ -960,10 +1033,17 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
         }
 
     except Exception as e:
+        if isinstance(e, Retry):
+            raise
         _log_exception(
             "task.error",
             task_name="render_video_task",
             project_id=project_id,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        if retries >= max_retries:
+            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+            raise
+        raise self.retry(exc=e, countdown=2 ** retries)

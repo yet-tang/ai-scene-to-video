@@ -157,14 +157,11 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { useProjectStore, type ProjectInfo } from '../stores/project'
+import { type ProjectInfo } from '../stores/project'
 import { projectApi } from '../api/project'
 import { showToast } from 'vant'
-import axios from 'axios'
 
 const router = useRouter()
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const projectStore = useProjectStore()
 
 const sellingPointOptions = ['学区房', '地铁沿线', '南北通透', '急售', '全新装修', '满五唯一', '视野开阔', '带车位']
 

@@ -62,15 +62,15 @@
       </div>
     </div>
 
-    <div class="loading-state" v-else-if="isLoading || projectStore.currentProject.status === 'RENDERING' || projectStore.currentProject.status === 'AUDIO_GENERATED'">
+    <div class="loading-state" v-else-if="isInProgress">
       <div class="loading-content">
         <van-loading size="48px" type="spinner" color="#1989fa" vertical>
           <div class="loading-text">正在合成视频...</div>
         </van-loading>
         <div class="loading-steps">
-          <div class="step active">1. 生成语音</div>
-          <div class="step active">2. 智能剪辑</div>
-          <div class="step">3. 合成字幕</div>
+          <div class="step" :class="{ active: stepIndex >= 1 }">1. 生成语音</div>
+          <div class="step" :class="{ active: stepIndex >= 2 }">2. 智能剪辑</div>
+          <div class="step" :class="{ active: stepIndex >= 3 }">3. 合成字幕</div>
         </div>
       </div>
     </div>
@@ -78,6 +78,7 @@
     <div class="empty-state" v-else>
       <van-empty image="error" description="视频生成遇到问题" />
       <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">请检查网络或稍后重试</div>
+      <div class="error-text" v-else>任务仍在处理中，请稍后返回查看</div>
       <van-button round type="primary" class="retry-btn" @click="router.push('/create')">
         返回首页
       </van-button>
@@ -86,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { showToast, showSuccessToast } from 'vant'
@@ -98,6 +99,20 @@ const projectId = route.params.id as string
 
 const isLoading = ref(true)
 let pollTimer: any = null
+
+const isInProgress = computed(() => {
+  if (projectStore.currentProject.finalVideoUrl) return false
+  if (isLoading.value) return true
+  return projectStore.currentProject.status !== 'FAILED'
+})
+
+const stepIndex = computed(() => {
+  const status = projectStore.currentProject.status
+  if (status === 'AUDIO_GENERATING') return 1
+  if (status === 'AUDIO_GENERATED') return 2
+  if (status === 'RENDERING') return 3
+  return 1
+})
 
 onMounted(async () => {
   if (!projectId) {
