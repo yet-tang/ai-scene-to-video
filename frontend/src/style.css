@@ -3,6 +3,10 @@
   line-height: 1.5;
   font-weight: 400;
 
+  --app-card-radius: 0px;
+  --app-card-shadow: none;
+  --app-card-border: none;
+
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: #242424;
@@ -24,7 +28,7 @@ a:hover {
 
 body {
   margin: 0;
-  display: flex;
+  display: block;
   min-width: 320px;
   min-height: 100vh;
 }
@@ -35,7 +39,7 @@ h1 {
 }
 
 button {
-  border-radius: 8px;
+  border-radius: 0px;
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
   font-size: 1em;
@@ -64,7 +68,16 @@ button:focus-visible {
 
 .container {
   max-width: 1280px;
-  width: 100%
+  width: 100%;
+}
+
+.app-card {
+  background: #fff;
+  border-radius: var(--app-card-radius);
+  box-shadow: var(--app-card-shadow);
+  border: var(--app-card-border);
+  overflow: hidden;
+  margin: 0;
 }
 
 @media (prefers-color-scheme: light) {

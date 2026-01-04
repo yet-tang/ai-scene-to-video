@@ -5,7 +5,7 @@
     <van-form @submit="onSubmit">
       <!-- 1. 基础信息 -->
       <div class="section-title">1. 基础信息</div>
-      <van-cell-group class="form-card">
+      <van-cell-group class="form-card app-card">
         <van-field
           v-model="formData.communityName"
           name="communityName"
@@ -75,7 +75,7 @@
       <div class="section-title">
         2. 核心卖点 <span class="sub-title">(帮助 AI 生成专业文案)</span>
       </div>
-      <van-cell-group class="form-card">
+      <van-cell-group class="form-card app-card">
         <div class="selling-points-container">
           <div 
             v-for="item in sellingPointOptions" 
@@ -102,7 +102,7 @@
       <div class="section-title">
         3. 素材上传 <span class="sub-title">(建议 3-5 段竖屏视频)</span>
       </div>
-      <van-cell-group class="form-card upload-card">
+      <van-cell-group class="form-card upload-card app-card">
         <div class="upload-grid">
           <div v-for="(item, index) in fileList" :key="index" class="preview-item">
             <video 
@@ -139,7 +139,7 @@
 
       <div class="submit-bar">
         <van-button 
-          round 
+           
           block 
           type="primary" 
           native-type="submit" 
@@ -291,8 +291,9 @@ const onSubmit = async () => {
 }
 
 .form-card {
-  /* overflow: hidden; */
-  /* box-shadow: 0 2px 8px rgba(0,0,0,0.02); */
+  margin: 0 0;
+  border-radius: var(--app-card-radius);
+  overflow: hidden;
 }
 
 .layout-inputs {

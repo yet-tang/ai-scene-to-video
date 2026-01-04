@@ -128,9 +128,62 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  function applyMockProject(id: string, status: string) {
+    const mockVideoUrl = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
+    const mockAudioUrl = 'https://interactive-examples.mdn.mozilla.net/media/examples/t-rex-roar.mp3'
+
+    currentProject.value.id = id
+    currentProject.value.title = 'Mock 项目 - 阳光花园 2室1厅'
+    currentProject.value.status = status
+    currentProject.value.script = '欢迎来到阳光花园，小区环境优美，配套成熟。客厅通透明亮，卧室安静舒适。'
+    currentProject.value.info = {
+      communityName: '阳光花园',
+      layout: { room: 2, hall: 1, restroom: 1 },
+      area: 89,
+      price: 268,
+      sellingPoints: ['南北通透', '地铁沿线', '学区房'],
+      remarks: 'Mock 数据，仅用于页面预览。'
+    }
+
+    if (status === 'COMPLETED') {
+      currentProject.value.audioUrl = mockAudioUrl
+      currentProject.value.finalVideoUrl = mockVideoUrl
+      return
+    }
+
+    if (status === 'AUDIO_GENERATED' || status === 'RENDERING') {
+      currentProject.value.audioUrl = mockAudioUrl
+      currentProject.value.finalVideoUrl = ''
+      return
+    }
+
+    currentProject.value.audioUrl = ''
+    currentProject.value.finalVideoUrl = ''
+  }
+
+  function applyMockTimeline(assetCount = 5) {
+    const mockVideoUrl = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
+    const labels = ['小区环境', '客厅', '餐厅', '主卧', '厨房', '卫生间']
+
+    const count = Math.max(0, Math.min(12, assetCount))
+    currentProject.value.assets = Array.from({ length: count }).map((_, idx) => {
+      const label = labels[idx % labels.length] ?? '其他'
+      return {
+        id: `mock-asset-${idx + 1}`,
+        url: mockVideoUrl,
+        sceneLabel: label,
+        userLabel: label,
+        duration: 10 + (idx % 4) * 3,
+        sortOrder: idx
+      }
+    })
+  }
+
   return {
     currentProject,
     fetchProject,
-    fetchTimeline
+    fetchTimeline,
+    applyMockProject,
+    applyMockTimeline
   }
 })

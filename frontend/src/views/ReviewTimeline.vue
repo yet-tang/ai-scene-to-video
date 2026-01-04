@@ -9,7 +9,7 @@
       @click-left="router.back()"
     />
 
-    <div class="process-card" :class="{ done: analysisDone, error: timelinePollHasError }">
+    <div class="process-card app-card" :class="{ done: analysisDone, error: timelinePollHasError }">
       <div class="process-top">
         <div class="process-title">
           <van-loading v-if="processBusy" size="16" type="spinner" color="#1989fa" />
@@ -43,7 +43,7 @@
   </div>
 
     <template v-if="!showProgressOnly">
-    <div class="overview-card">
+    <div class="overview-card app-card">
       <div class="stat-item">
         <div class="value">{{ assets.length }}</div>
         <div class="label">片段数</div>
@@ -64,7 +64,7 @@
         <span class="sub">长按拖拽调整顺序</span>
       </div>
 
-      <div class="timeline-skeleton" v-if="assets.length === 0">
+      <div class="timeline-skeleton app-card" v-if="assets.length === 0">
         <van-skeleton title :row="6" />
       </div>
 
@@ -178,7 +178,7 @@
     </template>
 
     <van-overlay :show="isRendering" class="render-overlay">
-      <div class="render-overlay-content">
+      <div class="render-overlay-content app-card">
         <van-loading size="42" type="spinner" color="#1989fa" />
         <div class="render-overlay-title">后台正在提交合成任务</div>
         <div class="render-overlay-sub">语音生成、剪辑与字幕合成会在结果页持续更新</div>
@@ -205,6 +205,14 @@ const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
 const projectId = route.params.id as string
+
+const isMock = computed(() => {
+  const v = route.query.mock
+  return v === '1' || v === 'true'
+})
+
+const mockMode = computed(() => (route.query.mockMode as string) || 'full')
+const mockAssets = computed(() => Number(route.query.mockAssets ?? 5))
 
 const assets = ref<UIAsset[]>([])
 const isScriptGenerating = ref(false)
@@ -247,6 +255,27 @@ onMounted(async () => {
     return
   }
 
+  if (isMock.value) {
+    const count = Number.isFinite(mockAssets.value) ? mockAssets.value : 5
+    if (mockMode.value === 'progress') {
+      projectStore.applyMockProject(projectId, 'ANALYZING')
+      projectStore.applyMockTimeline(0)
+    } else {
+      projectStore.applyMockProject(projectId, 'REVIEW')
+      projectStore.applyMockTimeline(count)
+    }
+
+    const storeAssets = projectStore.currentProject.assets
+    const globalScript = projectStore.currentProject.script || ''
+    const distributedScripts = distributeScript(globalScript, storeAssets.length)
+    assets.value = storeAssets.map((a, i) => ({
+      ...a,
+      script: distributedScripts[i] || ''
+    }))
+    analysisDone.value = mockMode.value !== 'progress'
+    return
+  }
+
   await loadData()
   if (!analysisDone.value) {
     startTimelinePolling()
@@ -259,6 +288,7 @@ onUnmounted(() => {
 })
 
 const loadData = async () => {
+  if (isMock.value) return
   try {
     await projectStore.fetchProject(projectId)
     await projectStore.fetchTimeline(projectId)
@@ -469,6 +499,10 @@ const pollTimelineOnce = async () => {
 }
 
 const manualRefresh = async () => {
+  if (isMock.value) {
+    showToast('Mock 模式下不刷新')
+    return
+  }
   await pollTimelineOnce()
 }
 
@@ -542,6 +576,10 @@ const formatTimeRange = (index: number) => {
 }
 
 const onDragEnd = async () => {
+  if (isMock.value) {
+    showToast('Mock 模式下不保存排序')
+    return
+  }
   const updates = assets.value.map((asset, index) => {
     return projectApi.updateAsset(projectId, asset.id, { sortOrder: index })
   })
@@ -571,7 +609,11 @@ const onSceneConfirm = async ({ selectedOptions }: any) => {
     asset.userLabel = newVal
     
     try {
+        if (isMock.value) {
+          showToast('Mock 模式下不保存修改')
+        } else {
         await projectApi.updateAsset(projectId, asset.id, { userLabel: newVal })
+        }
     } catch (e) {
         showToast('修改失败')
     }
@@ -580,6 +622,10 @@ const onSceneConfirm = async ({ selectedOptions }: any) => {
 }
 
 const onGenerateScript = async () => {
+    if (isMock.value) {
+      showToast('Mock 模式下不生成解说')
+      return
+    }
     isScriptGenerating.value = true
     try {
         await projectApi.generateScript(projectId)
@@ -593,6 +639,10 @@ const onGenerateScript = async () => {
 }
 
 const onGenerateVideo = async () => {
+  if (isMock.value) {
+    router.push(`/result/${projectId}?mock=1&mockStatus=loading`)
+    return
+  }
   const combinedScript = assets.value.map(a => a.script).join('\n')
   
   if (!combinedScript.trim()) {
@@ -622,22 +672,16 @@ const onGenerateVideo = async () => {
 
 .overview-card {
   margin: 12px 16px;
-  background: #fff;
-  border-radius: 8px;
   padding: 16px 8px;
   display: flex;
   align-items: center;
   justify-content: space-around;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
 }
 
 .process-card {
   margin: 12px 16px;
-  background: #fff;
-  border-radius: 10px;
   padding: 12px 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-  border: 1px solid #ebedf0;
+  border: var(--app-card-border);
 }
 
 .process-card.done {
@@ -702,10 +746,7 @@ const onGenerateVideo = async () => {
 
 .timeline-skeleton {
   margin: 0 16px;
-  background: #fff;
-  border-radius: 8px;
   padding: 12px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
 }
 
 .stat-item {
@@ -750,10 +791,13 @@ const onGenerateVideo = async () => {
 
 .timeline-item {
   background: #fff;
-  margin-bottom: 12px;
+  margin: 0 16px 12px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  border-radius: var(--app-card-radius);
+  overflow: hidden;
+  border: var(--app-card-border);
+  box-shadow: var(--app-card-shadow);
   position: relative;
   transition: all 0.2s;
 }
@@ -922,15 +966,13 @@ const onGenerateVideo = async () => {
 }
 
 .render-overlay-content {
-  width: min(320px, calc(100vw - 48px));
+  width: min(360px, calc(100vw - 48px));
   background: rgba(255, 255, 255, 0.96);
-  border-radius: 12px;
   padding: 18px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.18);
 }
 
 .render-overlay-title {

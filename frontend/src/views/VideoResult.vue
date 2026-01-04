@@ -11,7 +11,7 @@
 
       <div class="result-container" v-if="projectStore.currentProject.finalVideoUrl">
         <!-- 视频播放区域 -->
-        <div class="video-wrapper">
+        <div class="video-wrapper app-card">
           <video 
             :src="projectStore.currentProject.finalVideoUrl" 
             controls 
@@ -26,7 +26,7 @@
         </div>
 
         <!-- 成功信息 -->
-        <div class="success-card">
+        <div class="success-card app-card">
           <div class="success-icon-wrapper">
             <van-icon name="success" color="#fff" size="24" />
           </div>
@@ -68,10 +68,17 @@
       </div>
 
       <div class="loading-state" v-else-if="isInProgress">
-        <div class="loading-content">
-          <van-loading size="48px" type="spinner" color="#1989fa" vertical>
-            <div class="loading-text">正在合成视频...</div>
-          </van-loading>
+        <div class="loading-content app-card">
+          <div class="loading-header">
+            <div class="loading-title">
+              <van-loading size="16" type="spinner" color="#1989fa" />
+              <span>正在合成视频</span>
+            </div>
+            <div class="loading-meta">{{ loadingPercent }}%</div>
+          </div>
+
+          <van-progress :percentage="loadingPercent" stroke-width="8" />
+
           <div class="loading-steps">
             <div class="step" :class="{ active: stepIndex >= 1 }">1. 生成语音</div>
             <div class="step" :class="{ active: stepIndex >= 2 }">2. 智能剪辑</div>
@@ -108,6 +115,13 @@ const router = useRouter()
 const projectStore = useProjectStore()
 const projectId = route.params.id as string
 
+const isMock = computed(() => {
+  const v = route.query.mock
+  return v === '1' || v === 'true'
+})
+
+const mockStatus = computed(() => (route.query.mockStatus as string) || 'completed')
+
 const isLoading = ref(true)
 let pollTimer: any = null
 
@@ -125,9 +139,34 @@ const stepIndex = computed(() => {
   return 1
 })
 
+const loadingPercent = computed(() => {
+  if (isLoading.value) return 10
+  const status = projectStore.currentProject.status
+  if (status === 'AUDIO_GENERATING') return 25
+  if (status === 'AUDIO_GENERATED') return 45
+  if (status === 'RENDERING') return 75
+  if (status === 'COMPLETED') return 100
+  return 10
+})
+
 onMounted(async () => {
   if (!projectId) {
     router.replace('/create')
+    return
+  }
+
+  if (isMock.value) {
+    const status = mockStatus.value
+    if (status === 'failed') {
+      projectStore.applyMockProject(projectId, 'FAILED')
+    } else if (status === 'audio') {
+      projectStore.applyMockProject(projectId, 'AUDIO_GENERATED')
+    } else if (status === 'loading') {
+      projectStore.applyMockProject(projectId, 'RENDERING')
+    } else {
+      projectStore.applyMockProject(projectId, 'COMPLETED')
+    }
+    isLoading.value = false
     return
   }
   
@@ -140,6 +179,7 @@ onUnmounted(() => {
 })
 
 const checkStatus = async () => {
+  if (isMock.value) return
   try {
     await projectStore.fetchProject(projectId)
     isLoading.value = false
@@ -189,14 +229,11 @@ const shareVideo = () => {
 <style scoped>
 .video-result {
   min-height: 100vh;
-  background-color: #fff;
+  background-color: #f7f8fa;
   display: flex;
   flex-direction: column;
 }
 
-.transparent-nav {
-  background: transparent;
-}
 
 .result-container {
   flex: 1;
@@ -205,14 +242,14 @@ const shareVideo = () => {
 }
 
 .video-wrapper {
-  width: 100%;
+  width: calc(100% - 32px);
+  margin: 12px 16px 0;
   /* aspect-ratio: 9/16; removed to let video decide height but max-height constrained */
   max-height: 60vh;
   background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
 
 .result-video {
@@ -223,7 +260,8 @@ const shareVideo = () => {
 }
 
 .audio-wrapper {
-  padding: 12px 16px 0;
+  padding: 12px 0 0;
+  margin: 0 16px;
 }
 
 .result-audio {
@@ -232,7 +270,8 @@ const shareVideo = () => {
 
 .loading-audio {
   margin-top: 18px;
-  width: min(520px, 90vw);
+  width: 100%;
+  max-width: 100%;
 }
 
 .loading-audio-title {
@@ -245,10 +284,7 @@ const shareVideo = () => {
 .success-card {
   padding: 24px 16px;
   text-align: center;
-  background: #fff;
-  border-top-left-radius: 20px;
-  border-top-right-radius: 20px;
-  margin-top: -20px;
+  margin: 12px 16px 0;
   position: relative;
   z-index: 10;
 }
@@ -284,7 +320,7 @@ const shareVideo = () => {
 }
 
 .action-buttons {
-  padding: 0 32px 48px;
+  padding: 0 32px calc(48px + env(safe-area-inset-bottom));
   margin-top: auto;
 }
 
@@ -319,39 +355,53 @@ const shareVideo = () => {
 .loading-state {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex: 1;
+  padding: 12px 0;
   background: #f7f8fa;
 }
 
 .loading-content {
-  background: #fff;
-  padding: 40px;
-  border-radius: 16px;
-  text-align: center;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
-  width: 80%;
+  margin: 12px 16px;
+  padding: 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.loading-text {
-  margin-top: 16px;
-  font-size: 16px;
+.loading-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loading-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
   color: #323233;
-  font-weight: 500;
+}
+
+.loading-meta {
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
 }
 
 .loading-steps {
-  margin-top: 24px;
-  text-align: left;
-  padding-left: 20px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .step {
   font-size: 13px;
-  color: #c8c9cc;
-  margin-bottom: 8px;
-  transition: all 0.3s;
+  color: #94a3b8;
 }
 
 .step.active {
@@ -364,8 +414,9 @@ const shareVideo = () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
-  background: #fff;
+  flex: 1;
+  padding: 24px 16px;
+  background: #f7f8fa;
 }
 
 .retry-btn {
