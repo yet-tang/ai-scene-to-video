@@ -91,6 +91,8 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
+        when(projectService.generateScript(id)).thenReturn("task");
+        when(projectService.getProject(id)).thenReturn(Project.builder().id(id).build());
 
         var resp = controller.generateScript(id);
 
@@ -142,4 +144,3 @@ class ProjectControllerTest {
         verify(projectService).renderVideo(id);
     }
 }
-

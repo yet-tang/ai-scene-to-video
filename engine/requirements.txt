@@ -9,7 +9,7 @@ celery==5.3.6
 redis==5.0.1
 
 # AI & Vision
-dashscope==1.13.0
+dashscope==1.25.5
 opencv-python-headless==4.8.1.78
 Pillow==10.1.0
 numpy==1.26.2

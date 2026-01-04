@@ -31,3 +31,13 @@ class Config:
     SMART_SPLIT_STRATEGY = os.getenv("SMART_SPLIT_STRATEGY", "hybrid")
     SMART_SPLIT_MIN_DURATION_SEC = float(os.getenv("SMART_SPLIT_MIN_DURATION_SEC", "30"))
     SCENE_DETECT_THRESHOLD = float(os.getenv("SCENE_DETECT_THRESHOLD", "27.0"))
+
+    TTS_ENGINE = os.getenv("TTS_ENGINE", "cosyvoice").lower()
+    _DEFAULT_TTS_MODEL = "cosyvoice-v3-flash" if TTS_ENGINE in {"cosyvoice", "tts_v2"} else "sambert-zhigui-v1"
+    TTS_MODEL = os.getenv("TTS_MODEL", _DEFAULT_TTS_MODEL)
+    TTS_VOICE = os.getenv("TTS_VOICE", "longanyang")
+    _TTS_ENABLE_SSML_RAW = os.getenv("TTS_ENABLE_SSML", "")
+    TTS_ENABLE_SSML = (_TTS_ENABLE_SSML_RAW.lower() in {"1", "true", "yes", "y"}) if _TTS_ENABLE_SSML_RAW else (TTS_ENGINE in {"cosyvoice", "tts_v2"})
+    TTS_VOLUME = int(os.getenv("TTS_VOLUME", "50"))
+    TTS_SPEECH_RATE = float(os.getenv("TTS_SPEECH_RATE", "1.0"))
+    TTS_PITCH_RATE = float(os.getenv("TTS_PITCH_RATE", "1.0"))
