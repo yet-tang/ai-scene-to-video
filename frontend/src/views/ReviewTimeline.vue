@@ -37,11 +37,12 @@
         </div>
       </div>
 
-      <div class="process-error" v-if="timelinePollHasError">
-        {{ timelinePollErrorText }}
-      </div>
+    <div class="process-error" v-if="timelinePollHasError">
+      {{ timelinePollErrorText }}
     </div>
+  </div>
 
+    <template v-if="!showProgressOnly">
     <div class="overview-card">
       <div class="stat-item">
         <div class="value">{{ assets.length }}</div>
@@ -174,6 +175,7 @@
         @cancel="showPicker = false"
       />
     </van-popup>
+    </template>
 
     <van-overlay :show="isRendering" class="render-overlay">
       <div class="render-overlay-content">
@@ -246,7 +248,9 @@ onMounted(async () => {
   }
 
   await loadData()
-  startTimelinePolling()
+  if (!analysisDone.value) {
+    startTimelinePolling()
+  }
 })
 
 onUnmounted(() => {
@@ -268,6 +272,7 @@ const loadData = async () => {
         ...a,
         script: distributedScripts[i] || ''
     }))
+    analysisDone.value = assets.value.length > 0 && isSplitDoneStatus(projectStore.currentProject.status)
 
   } catch (e) {
     showToast('加载失败')
@@ -284,6 +289,21 @@ const formatClock = (ts: number | null) => {
 }
 
 const projectStatus = computed(() => projectStore.currentProject.status || '')
+
+const isSplitDoneStatus = (status: string) => {
+  return [
+    'REVIEW',
+    'SCRIPT_GENERATING',
+    'SCRIPT_GENERATED',
+    'AUDIO_GENERATING',
+    'AUDIO_GENERATED',
+    'RENDERING',
+    'COMPLETED',
+    'FAILED'
+  ].includes(status)
+}
+
+const showProgressOnly = computed(() => !analysisDone.value)
 
 const analysisLabeledCount = computed(() => assets.value.filter(a => !!a.sceneLabel).length)
 const analysisTotalCount = computed(() => assets.value.length)
@@ -409,7 +429,7 @@ const mergeTimelineAssets = (newAssets: Asset[]) => {
   }
 
   if (!analysisDone.value) {
-    const done = assets.value.length > 0 && assets.value.every(a => !!a.sceneLabel)
+    const done = assets.value.length > 0 && isSplitDoneStatus(projectStatus.value)
     if (done) {
       analysisDone.value = true
       stopTimelinePolling()
