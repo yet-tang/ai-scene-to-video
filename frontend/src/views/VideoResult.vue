@@ -1,87 +1,98 @@
 <template>
-  <div class="video-result">
-    <van-nav-bar
-      title="制作完成"
-      left-arrow
-      @click-left="router.push('/create')"
-      :border="false"
-      class="transparent-nav"
-    />
+  <div class="container">
+    <div class="video-result">
+      <van-nav-bar
+        title="制作完成"
+        left-arrow
+        @click-left="router.push('/create')"
+        :border="false"
+        class="transparent-nav"
+      />
 
-    <div class="result-container" v-if="projectStore.currentProject.finalVideoUrl">
-      <!-- 视频播放区域 -->
-      <div class="video-wrapper">
-        <video 
-          :src="projectStore.currentProject.finalVideoUrl" 
-          controls 
-          autoplay
-          playsinline
-          class="result-video"
-        ></video>
+      <div class="result-container" v-if="projectStore.currentProject.finalVideoUrl">
+        <!-- 视频播放区域 -->
+        <div class="video-wrapper">
+          <video 
+            :src="projectStore.currentProject.finalVideoUrl" 
+            controls 
+            autoplay
+            playsinline
+            class="result-video"
+          ></video>
+        </div>
+
+        <div class="audio-wrapper" v-if="projectStore.currentProject.audioUrl">
+          <audio :src="projectStore.currentProject.audioUrl" controls preload="metadata" class="result-audio"></audio>
+        </div>
+
+        <!-- 成功信息 -->
+        <div class="success-card">
+          <div class="success-icon-wrapper">
+            <van-icon name="success" color="#fff" size="24" />
+          </div>
+          <div class="title">视频制作成功</div>
+          <div class="desc">
+            AI 已为您完成剪辑、配音与字幕<br>
+            <span class="highlight">专业房产解说风格</span>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="action-buttons">
+          <van-button 
+            round 
+            block 
+            type="primary" 
+            class="mb-16 main-btn"
+            color="linear-gradient(to right, #1989fa, #39b9f5)"
+            @click="downloadVideo"
+          >
+            <van-icon name="down" class="btn-icon" /> 保存到相册
+          </van-button>
+          
+          <van-button 
+            round 
+            block 
+            plain 
+            type="primary" 
+            class="mb-16"
+            @click="shareVideo"
+          >
+            <van-icon name="share" class="btn-icon" /> 复制链接分享
+          </van-button>
+
+          <div class="secondary-actions">
+            <span @click="router.push('/create')">再做一个</span>
+          </div>
+        </div>
       </div>
 
-      <!-- 成功信息 -->
-      <div class="success-card">
-        <div class="success-icon-wrapper">
-          <van-icon name="success" color="#fff" size="24" />
-        </div>
-        <div class="title">视频制作成功</div>
-        <div class="desc">
-          AI 已为您完成剪辑、配音与字幕<br>
-          <span class="highlight">专业房产解说风格</span>
+      <div class="loading-state" v-else-if="isInProgress">
+        <div class="loading-content">
+          <van-loading size="48px" type="spinner" color="#1989fa" vertical>
+            <div class="loading-text">正在合成视频...</div>
+          </van-loading>
+          <div class="loading-steps">
+            <div class="step" :class="{ active: stepIndex >= 1 }">1. 生成语音</div>
+            <div class="step" :class="{ active: stepIndex >= 2 }">2. 智能剪辑</div>
+            <div class="step" :class="{ active: stepIndex >= 3 }">3. 合成字幕</div>
+          </div>
+
+          <div class="loading-audio" v-if="projectStore.currentProject.audioUrl">
+            <div class="loading-audio-title">语音已生成</div>
+            <audio :src="projectStore.currentProject.audioUrl" controls preload="metadata" class="result-audio"></audio>
+          </div>
         </div>
       </div>
 
-      <!-- 操作按钮 -->
-      <div class="action-buttons">
-        <van-button 
-          round 
-          block 
-          type="primary" 
-          class="mb-16 main-btn"
-          color="linear-gradient(to right, #1989fa, #39b9f5)"
-          @click="downloadVideo"
-        >
-          <van-icon name="down" class="btn-icon" /> 保存到相册
+      <div class="empty-state" v-else>
+        <van-empty image="error" description="视频生成遇到问题" />
+        <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">请检查网络或稍后重试</div>
+        <div class="error-text" v-else>任务仍在处理中，请稍后返回查看</div>
+        <van-button round type="primary" class="retry-btn" @click="router.push('/create')">
+          返回首页
         </van-button>
-        
-        <van-button 
-          round 
-          block 
-          plain 
-          type="primary" 
-          class="mb-16"
-          @click="shareVideo"
-        >
-          <van-icon name="share" class="btn-icon" /> 复制链接分享
-        </van-button>
-
-        <div class="secondary-actions">
-          <span @click="router.push('/create')">再做一个</span>
-        </div>
       </div>
-    </div>
-
-    <div class="loading-state" v-else-if="isInProgress">
-      <div class="loading-content">
-        <van-loading size="48px" type="spinner" color="#1989fa" vertical>
-          <div class="loading-text">正在合成视频...</div>
-        </van-loading>
-        <div class="loading-steps">
-          <div class="step" :class="{ active: stepIndex >= 1 }">1. 生成语音</div>
-          <div class="step" :class="{ active: stepIndex >= 2 }">2. 智能剪辑</div>
-          <div class="step" :class="{ active: stepIndex >= 3 }">3. 合成字幕</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="empty-state" v-else>
-      <van-empty image="error" description="视频生成遇到问题" />
-      <div class="error-text" v-if="projectStore.currentProject.status === 'FAILED'">请检查网络或稍后重试</div>
-      <div class="error-text" v-else>任务仍在处理中，请稍后返回查看</div>
-      <van-button round type="primary" class="retry-btn" @click="router.push('/create')">
-        返回首页
-      </van-button>
     </div>
   </div>
 </template>
@@ -209,6 +220,26 @@ const shareVideo = () => {
   height: 100%;
   max-height: 60vh;
   object-fit: contain;
+}
+
+.audio-wrapper {
+  padding: 12px 16px 0;
+}
+
+.result-audio {
+  width: 100%;
+}
+
+.loading-audio {
+  margin-top: 18px;
+  width: min(520px, 90vw);
+}
+
+.loading-audio-title {
+  font-size: 13px;
+  color: #323233;
+  font-weight: 600;
+  margin-bottom: 10px;
 }
 
 .success-card {

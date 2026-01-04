@@ -44,6 +44,9 @@ public class Project {
     @Column(name = "script_content", columnDefinition = "text")
     private String scriptContent;
 
+    @Column(name = "audio_url")
+    private String audioUrl;
+
     @Column(name = "final_video_url")
     private String finalVideoUrl;
 

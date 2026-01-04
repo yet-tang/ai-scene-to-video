@@ -32,6 +32,7 @@ export const useProjectStore = defineStore('project', () => {
     info: ProjectInfo
     assets: Asset[]
     script: string
+    audioUrl: string
     finalVideoUrl: string
     status: string
   }>({
@@ -47,6 +48,7 @@ export const useProjectStore = defineStore('project', () => {
     },
     assets: [],
     script: '',
+    audioUrl: '',
     finalVideoUrl: '',
     status: 'DRAFT'
   })
@@ -59,6 +61,7 @@ export const useProjectStore = defineStore('project', () => {
       currentProject.value.title = data.title
       currentProject.value.status = data.status
       currentProject.value.script = data.scriptContent
+      currentProject.value.audioUrl = data.audioUrl
       currentProject.value.finalVideoUrl = data.finalVideoUrl
       
       // Parse houseInfo (JSON)

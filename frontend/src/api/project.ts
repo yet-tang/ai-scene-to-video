@@ -80,6 +80,14 @@ export const projectApi = {
     return client.post(`/v1/projects/${projectId}/script`)
   },
 
+  updateScript: (projectId: string, scriptContent: string) => {
+    return client.put(`/v1/projects/${projectId}/script`, scriptContent, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8'
+      }
+    })
+  },
+
   generateAudio: (projectId: string, scriptContent: string) => {
     return client.post(`/v1/projects/${projectId}/audio`, scriptContent, {
         headers: {

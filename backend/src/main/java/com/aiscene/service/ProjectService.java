@@ -23,7 +23,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -172,9 +171,35 @@ public class ProjectService {
     }
 
     @Transactional
+    public void updateScriptContent(UUID projectId, String scriptContent) {
+        Project project = getProject(projectId);
+        if (project.getStatus() == ProjectStatus.COMPLETED) {
+            throw new IllegalStateException("Project already completed");
+        }
+        if (
+                project.getStatus() == ProjectStatus.AUDIO_GENERATING
+                        || project.getStatus() == ProjectStatus.AUDIO_GENERATED
+                        || project.getStatus() == ProjectStatus.RENDERING
+        ) {
+            throw new IllegalStateException("Project is processing");
+        }
+        project.setScriptContent(scriptContent);
+        project.setStatus(ProjectStatus.SCRIPT_GENERATED);
+        projectRepository.save(project);
+    }
+
+    @Transactional
     public void renderVideo(UUID projectId) {
         Project project = getProject(projectId);
+        String scriptContent = project.getScriptContent();
+        if (scriptContent == null || scriptContent.trim().isEmpty()) {
+            throw new IllegalStateException("Script content is empty");
+        }
+
         List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
+        if (assets.isEmpty()) {
+            throw new IllegalStateException("No assets to render");
+        }
         
         // Prepare data for rendering
         List<Object> timelineAssets = assets.stream().map(asset -> {
@@ -184,34 +209,10 @@ public class ProjectService {
             return map;
         }).collect(Collectors.toList());
 
-        // We assume audio is already generated and we pass its path or ID.
-        // For MVP stateless, we might need to pass the audio URL if we uploaded it,
-        // OR we rely on the worker to find it (if we use shared storage).
-        // Since our Engine task returned a local path in JSON, we can't easily access it here unless we stored it in DB.
-        // Let's assume we stored it in project (need to add audio_url field to Project entity ideally).
-        // For now, let's pass a placeholder or assume the worker knows where it is based on project ID (e.g. /tmp/{project_id}.mp3).
-        // But wait, the task returned "audio_path" in the result, but we didn't save it to DB in the task logic?
-        // Ah, in generate_audio_task we returned it but didn't update DB project.audio_url.
-        // We should fix Engine task to update DB project.audio_url if we want to be robust.
-        // For this MVP step, let's pass null and let Worker handle it or fix Engine task.
-        
-        // Actually, let's just trigger the task. The worker `render_video_task` signature expects `audio_path`.
-        // If we don't have it here, we have a problem.
-        // Solution: Engine `generate_audio_task` should have updated `projects` table with `audio_url`.
-        // Let's assume it did (or we will fix it).
-        // For now, passing "auto" or null to let worker figure it out? No, worker needs explicit path.
-        
-        // Let's assume the previous step (Audio Gen) saved it to a predictable path or DB.
-        // Let's look at `generate_audio_task` in `engine/tasks.py`. 
-        // It returned the path but didn't update DB.
-        // We should probably update `engine/tasks.py` to save audio path to DB.
-        // BUT, since we are in `ProjectService` now, let's just finish this method and then I'll go fix Engine task.
-        
-        String audioPath = "/tmp/" + projectId + ".mp3"; // Hacky convention for MVP if we assume shared tmp or re-download
-        project.setStatus(ProjectStatus.RENDERING);
+        project.setStatus(ProjectStatus.AUDIO_GENERATING);
         projectRepository.save(project);
         
-        taskQueueService.submitRenderVideoTask(projectId, timelineAssets, audioPath);
+        taskQueueService.submitRenderPipelineTask(projectId, scriptContent, timelineAssets);
     }
 
     @Transactional

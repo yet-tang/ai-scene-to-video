@@ -103,6 +103,15 @@ public class ProjectController {
         return ResponseEntity.accepted().body(body);
     }
 
+    @PutMapping(value = "/{id}/script", consumes = "text/plain")
+    public ResponseEntity<Void> updateScript(@PathVariable UUID id, @RequestBody(required = false) String scriptContent) {
+        if (scriptContent == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        projectService.updateScriptContent(id, scriptContent);
+        return ResponseEntity.accepted().build();
+    }
+
     @PostMapping("/{id}/audio")
     public ResponseEntity<Void> generateAudio(@PathVariable UUID id, @RequestBody(required = false) String scriptContent) {
         // If scriptContent is null, service will pull from DB? No, current impl expects it.

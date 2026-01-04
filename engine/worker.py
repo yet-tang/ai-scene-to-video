@@ -65,6 +65,8 @@ class JsonFormatter(logging.Formatter):
             "object_key",
             "url_host",
             "bytes",
+            "audio_path",
+            "countdown_sec",
             "remaining_assets",
         ):
             if hasattr(record, k):

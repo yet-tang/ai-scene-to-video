@@ -160,9 +160,9 @@ class ProjectServiceTest {
     }
 
     @Test
-    void renderVideo_submitsRenderTaskWithAssetsAndAudioConvention() {
+    void renderVideo_submitsRenderPipelineTask() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).build();
+        Project project = Project.builder().id(projectId).scriptContent("content").build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -172,16 +172,11 @@ class ProjectServiceTest {
 
         projectService.renderVideo(projectId);
 
-        ArgumentCaptor<List<Object>> assetsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(taskQueueService).submitRenderVideoTask(eq(projectId), assetsCaptor.capture(), eq("/tmp/" + projectId + ".mp3"));
-        List<Object> payload = assetsCaptor.getValue();
-        assertThat(payload).hasSize(2);
-        Map<?, ?> first = (Map<?, ?>) payload.get(0);
-        assertThat(first.get("oss_url")).isEqualTo("u1");
-        assertThat(first.get("duration")).isEqualTo(1.0);
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("content"), any(List.class));
+
         ArgumentCaptor<Project> projectCaptor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(projectCaptor.capture());
-        assertThat(projectCaptor.getValue().getStatus()).isEqualTo(ProjectStatus.RENDERING);
+        assertThat(projectCaptor.getValue().getStatus()).isEqualTo(ProjectStatus.AUDIO_GENERATING);
     }
 
     @Test

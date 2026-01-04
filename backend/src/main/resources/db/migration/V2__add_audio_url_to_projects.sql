@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN audio_url VARCHAR(1024);

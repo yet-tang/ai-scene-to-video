@@ -45,7 +45,7 @@ s3_client = boto3.client(
     region_name=Config.S3_STORAGE_REGION
 )
 
-def upload_to_s3(file_path: str, object_name: str) -> str:
+def upload_to_s3(file_path: str, object_name: str, content_type: str = "video/mp4") -> str:
     """Upload a file to S3 bucket and return public URL"""
     started = time.monotonic()
     try:
@@ -58,13 +58,14 @@ def upload_to_s3(file_path: str, object_name: str) -> str:
             "s3.upload.start",
             bucket=Config.S3_STORAGE_BUCKET,
             object_key=object_name,
+            content_type=content_type,
             **({"bytes": size_bytes} if size_bytes is not None else {}),
         )
         s3_client.upload_file(
             file_path,
             Config.S3_STORAGE_BUCKET,
             object_name,
-            ExtraArgs={"ContentType": "video/mp4"},
+            ExtraArgs={"ContentType": content_type},
         )
 
         base = (Config.S3_STORAGE_PUBLIC_URL or "").rstrip("/")
@@ -79,27 +80,18 @@ def upload_to_s3(file_path: str, object_name: str) -> str:
         bucket = Config.S3_STORAGE_BUCKET
 
         if path == f"/{bucket}" or path.startswith(f"/{bucket}/"):
-            return f"{base}/{object_name}"
-
-        if host.startswith(f"{bucket}."):
-            return f"{base}/{object_name}"
-
-        if (
+            public_url = f"{base}/{object_name}"
+        elif host.startswith(f"{bucket}."):
+            public_url = f"{base}/{object_name}"
+        elif (
             ".r2.cloudflarestorage.com" in host
             or ".amazonaws.com" in host
             or "localhost" in host
         ):
             public_url = f"{base}/{bucket}/{object_name}"
-            _log_info(
-                "s3.upload.finish",
-                bucket=bucket,
-                object_key=object_name,
-                duration_ms=int((time.monotonic() - started) * 1000),
-                url_host=_url_host(public_url),
-            )
-            return public_url
+        else:
+            public_url = f"{base}/{object_name}"
 
-        public_url = f"{base}/{object_name}"
         _log_info(
             "s3.upload.finish",
             bucket=bucket,
@@ -922,24 +914,27 @@ def generate_audio_task(self, project_id: str, script_content: str):
         audio_path = audio_gen.generate_audio(script_content, output_path)
         _log_info("step.finish", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
 
-        _set_project_status(project_id, "AUDIO_GENERATED", skip_if_status_in=("RENDERING", "COMPLETED"))
+        # 2. Upload to S3 and Update DB
+        file_name = f"{project_id}.mp3"
+        audio_url = upload_to_s3(audio_path, file_name, content_type="audio/mpeg")
+        _log_info("step.finish", step="s3.upload_audio", task_name="generate_audio_task", project_id=project_id, url_host=_url_host(audio_url))
 
-        # 2. Upload to S3 (TODO: Implement S3 Upload in Engine or return path to Backend)
-        # For MVP, we might just store the path or binary in DB (not recommended for large files)
-        # Or better: Worker should have S3 Client.
-        # Let's assume we skip S3 upload here for a moment and just return "Done" 
-        # because the next step (Render) will need this file locally anyway if it runs on the same worker node.
-        # Ideally, we upload to S3 so Render task can download it (stateless).
-        
-        # NOTE: For this stateless design, we SHOULD upload.
-        # But adding S3 Client to Python Engine is a new dependency.
-        # Let's mock the upload or assume shared volume for MVP if strictly needed.
-        # To strictly follow "Stateless", we need `boto3`.
-        
-        # Let's add boto3 upload quickly if we want to be perfect, or just pass the path if using shared volume.
-        # Given "Stateless" rule, let's assume we need to upload.
-        # For now, I will just return the local path, assuming we might run render on same node 
-        # OR we will add S3 upload in next step.
+        # Update DB with audio_url
+        _log_info("step.start", step="db.update_project_audio_url", task_name="generate_audio_task", project_id=project_id)
+        conn = psycopg2.connect(Config.DB_DSN)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    update_query = """
+                        UPDATE projects 
+                        SET audio_url = %s,
+                            status = 'AUDIO_GENERATED'
+                        WHERE id = %s
+                    """
+                    cursor.execute(update_query, (audio_url, project_id))
+            _log_info("step.finish", step="db.update_project_audio_url", task_name="generate_audio_task", project_id=project_id)
+        finally:
+            conn.close()
         
         _log_info(
             "task.finish",
@@ -948,9 +943,15 @@ def generate_audio_task(self, project_id: str, script_content: str):
             status="completed",
             duration_ms=int((time.monotonic() - started) * 1000),
         )
+
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+        except Exception:
+            pass
         return {
             "project_id": project_id,
-            "audio_path": audio_path # Local path for now
+            "audio_url": audio_url
         }
 
     except Exception as e:
@@ -970,6 +971,130 @@ def generate_audio_task(self, project_id: str, script_content: str):
         raise self.retry(exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
+def render_pipeline_task(self, project_id: str, script_content: str, timeline_assets: list):
+    """
+    Unified Pipeline: Generate Audio -> Upload Audio -> Render Video -> Upload Video
+    """
+    started = time.monotonic()
+    _log_info(
+        "task.start",
+        task_name="render_pipeline_task",
+        project_id=project_id,
+    )
+
+    audio_path = None
+    output_path = None
+
+    try:
+        if not isinstance(script_content, str) or not script_content.strip():
+            raise ValueError("script_content is empty")
+        if not isinstance(timeline_assets, list) or len(timeline_assets) == 0:
+            raise ValueError("timeline_assets is empty")
+
+        _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("COMPLETED",))
+        
+        audio_temp_path = f"/tmp/{project_id}.mp3"
+        try:
+            if os.path.exists(audio_temp_path):
+                os.remove(audio_temp_path)
+        except Exception:
+            pass
+            
+        _log_info("step.start", step="tts.generate_audio", task_name="render_pipeline_task", project_id=project_id)
+        audio_path = audio_gen.generate_audio(script_content, audio_temp_path)
+        _log_info("step.finish", step="tts.generate_audio", task_name="render_pipeline_task", project_id=project_id)
+        
+        # Upload Audio to S3
+        file_name_mp3 = f"{project_id}.mp3"
+        audio_url = upload_to_s3(audio_path, file_name_mp3, content_type="audio/mpeg")
+        _log_info("step.finish", step="s3.upload_audio", task_name="render_pipeline_task", project_id=project_id, url_host=_url_host(audio_url))
+        
+        # Update DB with audio_url
+        _log_info("step.start", step="db.update_project_audio_url", task_name="render_pipeline_task", project_id=project_id)
+        conn = psycopg2.connect(Config.DB_DSN)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    update_query = """
+                        UPDATE projects 
+                        SET audio_url = %s,
+                            status = 'AUDIO_GENERATED'
+                        WHERE id = %s
+                    """
+                    cursor.execute(update_query, (audio_url, project_id))
+            _log_info("step.finish", step="db.update_project_audio_url", task_name="render_pipeline_task", project_id=project_id)
+        finally:
+            conn.close()
+
+        # --- Step 2: Render Video ---
+        _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
+        
+        temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+        temp_video.close()
+        
+        _log_info("step.start", step="render.render_video", task_name="render_pipeline_task", project_id=project_id)
+        output_path = video_render.render_video(timeline_assets, audio_path, temp_video.name)
+        _log_info("step.finish", step="render.render_video", task_name="render_pipeline_task", project_id=project_id)
+
+        # Upload Video to S3
+        file_name_mp4 = f"rendered_{project_id}.mp4"
+        final_video_url = upload_to_s3(output_path, file_name_mp4)
+        _log_info("step.finish", step="s3.upload_final_video", task_name="render_pipeline_task", project_id=project_id, url_host=_url_host(final_video_url))
+        
+        # Update DB with final_video_url
+        _log_info("step.start", step="db.update_project_final_url", task_name="render_pipeline_task", project_id=project_id)
+        conn = psycopg2.connect(Config.DB_DSN)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    update_query = """
+                        UPDATE projects 
+                        SET final_video_url = %s,
+                            status = 'COMPLETED'
+                        WHERE id = %s
+                    """
+                    cursor.execute(update_query, (final_video_url, project_id))
+            _log_info("step.finish", step="db.update_project_final_url", task_name="render_pipeline_task", project_id=project_id)
+        finally:
+            conn.close()
+
+        _log_info(
+            "task.finish",
+            task_name="render_pipeline_task",
+            project_id=project_id,
+            status="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        return {
+            "project_id": project_id,
+            "audio_url": audio_url,
+            "video_url": final_video_url
+        }
+
+    except Exception as e:
+        if isinstance(e, Retry):
+            raise
+        _log_exception(
+            "task.error",
+            task_name="render_pipeline_task",
+            project_id=project_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        # If pipeline fails, mark as FAILED
+        _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+
+    finally:
+        for p in (audio_path, output_path):
+            if not p:
+                continue
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+@celery_app.task(bind=True, max_retries=12)
 def render_video_task(self, project_id: str, timeline_assets: list, audio_path: str):
     """
     Background task to render final video.
@@ -993,7 +1118,28 @@ def render_video_task(self, project_id: str, timeline_assets: list, audio_path: 
                 raise RuntimeError("project already failed")
             if (not os.path.exists(audio_path)) or (os.path.getsize(audio_path) <= 0):
                 retries = int(getattr(self.request, "retries", 0) or 0)
-                raise self.retry(exc=RuntimeError("audio not ready"), countdown=2 ** retries)
+                countdown = min(60, 5 * (2 ** retries))
+                size_bytes = None
+                try:
+                    if os.path.exists(audio_path):
+                        size_bytes = os.path.getsize(audio_path)
+                except Exception:
+                    size_bytes = None
+                _log_info(
+                    "render.wait_for_audio",
+                    task_name="render_video_task",
+                    project_id=project_id,
+                    audio_path=audio_path,
+                    **({"bytes": size_bytes} if size_bytes is not None else {}),
+                    countdown_sec=int(countdown),
+                    attempt=attempt,
+                    retries=retries,
+                )
+                return self.retry(
+                    exc=RuntimeError("audio not ready"),
+                    countdown=countdown,
+                    throw=False,
+                )
 
         # 1. Render Video
         temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)

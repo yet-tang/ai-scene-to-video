@@ -79,6 +79,17 @@ public class TaskQueueService {
         log.info("Submitted render video task task_id={} project_id={}", taskId, projectId);
     }
 
+    public void submitRenderPipelineTask(UUID projectId, String scriptContent, java.util.List<Object> timelineAssets) {
+        Map<String, Object> extraHeaders = new HashMap<>();
+        extraHeaders.put("project_id", projectId.toString());
+        String taskId = sendCeleryTask(
+                "tasks.render_pipeline_task",
+                new Object[]{projectId.toString(), scriptContent, timelineAssets},
+                extraHeaders
+        );
+        log.info("Submitted render pipeline task task_id={} project_id={}", taskId, projectId);
+    }
+
     private String sendCeleryTask(String taskName, Object[] args, Map<String, Object> extraHeaders) {
         try {
             String taskId = UUID.randomUUID().toString();

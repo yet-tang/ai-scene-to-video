@@ -1,4 +1,5 @@
 <template>
+  <div class="container">
   <div class="review-timeline">
     <van-nav-bar
       title="智能分段确认"
@@ -181,6 +182,7 @@
         <div class="render-overlay-sub">语音生成、剪辑与字幕合成会在结果页持续更新</div>
       </div>
     </van-overlay>
+  </div>
   </div>
 </template>
 
@@ -580,7 +582,7 @@ const onGenerateVideo = async () => {
   
   isRendering.value = true
   try {
-      await projectApi.generateAudio(projectId, combinedScript)
+      await projectApi.updateScript(projectId, combinedScript)
       await projectApi.renderVideo(projectId)
       
       router.push(`/result/${projectId}`)
