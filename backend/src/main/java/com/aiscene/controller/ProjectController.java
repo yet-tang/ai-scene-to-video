@@ -11,6 +11,7 @@ import com.aiscene.entity.ProjectStatus;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,6 +27,14 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final StorageService storageService;
+
+    @GetMapping
+    public ResponseEntity<Page<Project>> listProjects(
+            @RequestHeader(value = "X-User-Id") Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        return ResponseEntity.ok(projectService.listProjects(userId, page, size));
+    }
 
     @PostMapping
     public ResponseEntity<Project> createProject(@RequestBody CreateProjectRequest request) {
@@ -104,11 +113,18 @@ public class ProjectController {
     }
 
     @PutMapping(value = "/{id}/script", consumes = "text/plain")
-    public ResponseEntity<Void> updateScript(@PathVariable UUID id, @RequestBody(required = false) String scriptContent) {
+    public ResponseEntity<Void> updateScript(
+            @PathVariable UUID id, 
+            @RequestBody(required = false) String scriptContent,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         if (scriptContent == null) {
             return ResponseEntity.badRequest().build();
         }
-        projectService.updateScriptContent(id, scriptContent);
+        if (userId != null) {
+            projectService.updateScriptContent(id, scriptContent, userId);
+        } else {
+            projectService.updateScriptContent(id, scriptContent);
+        }
         return ResponseEntity.accepted().build();
     }
 
@@ -131,8 +147,14 @@ public class ProjectController {
     }
 
     @PostMapping("/{id}/render")
-    public ResponseEntity<Void> renderVideo(@PathVariable UUID id) {
-        projectService.renderVideo(id);
+    public ResponseEntity<Void> renderVideo(
+            @PathVariable UUID id,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        if (userId != null) {
+            projectService.retryRender(id, userId);
+        } else {
+            projectService.renderVideo(id);
+        }
         return ResponseEntity.accepted().build();
     }
 }

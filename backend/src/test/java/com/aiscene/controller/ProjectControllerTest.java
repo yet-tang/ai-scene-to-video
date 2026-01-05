@@ -138,9 +138,25 @@ class ProjectControllerTest {
 
         UUID id = UUID.randomUUID();
 
-        var resp = controller.renderVideo(id);
+        var resp = controller.renderVideo(id, null);
 
         assertThat(resp.getStatusCode().value()).isEqualTo(202);
         verify(projectService).renderVideo(id);
+    }
+
+    @Test
+    void listProjects_delegatesToService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+        
+        Long userId = 123L;
+        org.springframework.data.domain.Page<Project> page = org.springframework.data.domain.Page.empty();
+        when(projectService.listProjects(userId, 1, 10)).thenReturn(page);
+        
+        var resp = controller.listProjects(userId, 1, 10);
+        
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isSameAs(page);
     }
 }

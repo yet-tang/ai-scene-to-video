@@ -12,6 +12,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -347,5 +351,31 @@ public class ProjectService {
         }
 
         return savedAsset;
+    }
+
+    public Page<Project> listProjects(Long userId, int page, int size) {
+        Pageable pageable = PageRequest.of(page - 1, size, Sort.by("createdAt").descending());
+        return projectRepository.findAllByUserId(userId, pageable);
+    }
+
+    @Transactional
+    public void updateScriptContent(UUID projectId, String scriptContent, Long userId) {
+        Project project = getProject(projectId);
+        if (!project.getUserId().equals(userId)) {
+            throw new RuntimeException("Forbidden: User does not own this project");
+        }
+        updateScriptContent(projectId, scriptContent);
+    }
+
+    @Transactional
+    public void retryRender(UUID projectId, Long userId) {
+        Project project = getProject(projectId);
+        if (!project.getUserId().equals(userId)) {
+            throw new RuntimeException("Forbidden: User does not own this project");
+        }
+        if (project.getStatus() == ProjectStatus.RENDERING) {
+            throw new RuntimeException("Project is already rendering");
+        }
+        renderVideo(projectId);
     }
 }

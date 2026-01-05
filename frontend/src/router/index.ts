@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import CreateProject from '../views/CreateProject.vue'
 import ReviewTimeline from '../views/ReviewTimeline.vue'
 import VideoResult from '../views/VideoResult.vue'
+import ProjectList from '../views/ProjectList.vue'
+import ProjectDetail from '../views/ProjectDetail.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -9,7 +11,17 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      redirect: '/create'
+      redirect: '/projects'
+    },
+    {
+      path: '/projects',
+      name: 'ProjectList',
+      component: ProjectList
+    },
+    {
+      path: '/projects/:id',
+      name: 'ProjectDetail',
+      component: ProjectDetail
     },
     {
       path: '/create',

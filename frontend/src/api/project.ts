@@ -38,6 +38,10 @@ export const projectApi = {
     return client.post('/v1/projects', data)
   },
 
+  list: (params: { page: number; size: number }) => {
+    return client.get('/v1/projects', { params })
+  },
+
   getPresignedUrl: (projectId: string, filename: string, contentType: string) => {
     return client.post<PresignedUrlResponse>(`/v1/projects/${projectId}/assets/presign`, null, {
       params: { filename, contentType }
