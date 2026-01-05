@@ -16,9 +16,37 @@ import time
 import math
 from urllib.parse import urlparse
 from celery.exceptions import Retry
+import traceback
+from datetime import datetime, timezone
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+def _get_task_headers(request) -> dict:
+    headers = getattr(request, "headers", None) or {}
+    if not headers and hasattr(request, "get"):
+        try:
+            headers = request.get("headers") or {}
+        except Exception:
+            headers = {}
+    if headers is None:
+        headers = {}
+    if isinstance(headers, dict):
+        return headers
+    try:
+        return dict(headers)
+    except Exception:
+        return {}
+
+def _retry_with_headers(task, *, exc: Exception, countdown: int):
+    headers = _get_task_headers(getattr(task, "request", None))
+    safe_headers = {}
+    for k in ("request_id", "user_id"):
+        v = headers.get(k)
+        if v is None:
+            continue
+        safe_headers[k] = str(v)
+    return task.retry(exc=exc, countdown=countdown, headers=safe_headers)
 
 def _url_host(url: str) -> str:
     try:
@@ -350,6 +378,52 @@ def _set_project_status(project_id: str, status: str, *, skip_if_status_in: tupl
     finally:
         conn.close()
 
+def _set_project_failed(
+    project_id: str,
+    *,
+    task_name: str,
+    step: str | None,
+    task_id: str | None,
+    request_id: str | None,
+    exc: Exception,
+):
+    started = time.monotonic()
+    error_log = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-20000:]
+    conn = psycopg2.connect(Config.DB_DSN)
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE projects
+                    SET status = 'FAILED',
+                        error_log = %s,
+                        error_task_id = %s,
+                        error_request_id = %s,
+                        error_step = %s,
+                        error_at = %s
+                    WHERE id = %s
+                      AND status != 'COMPLETED'
+                    """,
+                    (
+                        error_log,
+                        (task_id or "")[:128] or None,
+                        (request_id or "")[:128] or None,
+                        (step or "")[:64] or None,
+                        datetime.now(timezone.utc),
+                        project_id,
+                    ),
+                )
+        _log_exception(
+            "db.project_status.failed",
+            project_id=project_id,
+            task_name=task_name,
+            step=step,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    finally:
+        conn.close()
+
 def _get_project_status(project_id: str) -> str | None:
     conn = psycopg2.connect(Config.DB_DSN)
     try:
@@ -647,7 +721,20 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
 
     except Exception as e:
         _log_exception("task.error", task_name="analyze_video_task", project_id=project_id, asset_id=asset_id)
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        if retries >= max_retries:
+            headers = getattr(self.request, "headers", {}) or {}
+            _set_project_failed(
+                project_id,
+                task_name="analyze_video_task",
+                step="analyze_video",
+                task_id=getattr(self.request, "id", None),
+                request_id=headers.get("request_id"),
+                exc=e,
+            )
+            raise
+        raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
 def generate_script_task(self, project_id: str, house_info: dict, timeline_data: list):
@@ -676,7 +763,8 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
 
         return {"project_id": project_id, "script": script_content}
     except Exception as e:
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 def _parse_and_align_segments(project_id: str, script_content: str):
     """
@@ -819,9 +907,17 @@ def generate_audio_task(self, project_id: str, script_content: str):
         retries = int(getattr(self.request, "retries", 0) or 0)
         max_retries = int(getattr(self, "max_retries", 0) or 0)
         if retries >= max_retries:
-            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+            headers = getattr(self.request, "headers", {}) or {}
+            _set_project_failed(
+                project_id,
+                task_name="generate_audio_task",
+                step="generate_audio",
+                task_id=getattr(self.request, "id", None),
+                request_id=headers.get("request_id"),
+                exc=e,
+            )
             raise
-        raise self.retry(exc=e, countdown=2 ** retries)
+        raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=12)
 def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path: str):
@@ -885,9 +981,17 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
         retries = int(getattr(self.request, "retries", 0) or 0)
         max_retries = int(getattr(self, "max_retries", 0) or 0)
         if retries >= max_retries:
-            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+            headers = getattr(self.request, "headers", {}) or {}
+            _set_project_failed(
+                project_id,
+                task_name="render_video_task",
+                step="render_video",
+                task_id=getattr(self.request, "id", None),
+                request_id=headers.get("request_id"),
+                exc=e,
+            )
             raise
-        raise self.retry(exc=e, countdown=2 ** retries)
+        raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
 def render_pipeline_task(self, project_id: str, script_content: str, _timeline_assets: list):
@@ -966,5 +1070,14 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
 
     except Exception as e:
         if isinstance(e, Retry): raise
-        _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        headers = getattr(self.request, "headers", {}) or {}
+        _set_project_failed(
+            project_id,
+            task_name="render_pipeline_task",
+            step="render_pipeline",
+            task_id=getattr(self.request, "id", None),
+            request_id=headers.get("request_id"),
+            exc=e,
+        )
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        raise _retry_with_headers(self, exc=e, countdown=2 ** retries)

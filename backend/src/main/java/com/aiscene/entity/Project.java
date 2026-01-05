@@ -50,6 +50,21 @@ public class Project {
     @Column(name = "final_video_url")
     private String finalVideoUrl;
 
+    @Column(name = "error_log", columnDefinition = "text")
+    private String errorLog;
+
+    @Column(name = "error_task_id")
+    private String errorTaskId;
+
+    @Column(name = "error_request_id")
+    private String errorRequestId;
+
+    @Column(name = "error_step")
+    private String errorStep;
+
+    @Column(name = "error_at")
+    private LocalDateTime errorAt;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
