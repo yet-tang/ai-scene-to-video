@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import urllib.request
+import math
 
 def _format_tts_error(result) -> str:
     parts = []
@@ -216,6 +217,21 @@ def _ffmpeg_concat_mp3(parts: list[str], output_path: str):
             except Exception:
                 pass
 
+def _get_audio_duration_sec(file_path: str) -> float:
+    try:
+        cmd = [
+            "ffprobe", 
+            "-v", "error", 
+            "-show_entries", "format=duration", 
+            "-of", "default=noprint_wrappers=1:nokey=1", 
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        val = result.stdout.strip()
+        return float(val) if val else 0.0
+    except Exception:
+        return 0.0
+
 def _call_tts_v2_once(
     *,
     SpeechSynthesizerV2,
@@ -224,13 +240,14 @@ def _call_tts_v2_once(
     voice: str,
     payload: str,
     enable_ssml: bool,
+    speech_rate: float = 1.0,
 ):
     kwargs = dict(
         model=model,
         voice=voice,
         format=AudioFormat.MP3_48000HZ_MONO_256KBPS,
         volume=Config.TTS_VOLUME,
-        speech_rate=Config.TTS_SPEECH_RATE,
+        speech_rate=speech_rate,
         pitch_rate=Config.TTS_PITCH_RATE,
     )
     if enable_ssml:
@@ -314,6 +331,7 @@ def _text_to_emotional_ssml(text: str) -> str:
 
     escaped = escaped.replace("……", "…").replace("......", "…").replace(".....", "…").replace("....", "…").replace("...", "…")
 
+    # Standard pauses
     escaped = escaped.replace("，", "，<break time=\"180ms\"/>")
     escaped = escaped.replace(",", "，<break time=\"180ms\"/>")
     escaped = escaped.replace("。", "。<break time=\"320ms\"/>")
@@ -341,6 +359,52 @@ def _text_to_emotional_ssml(text: str) -> str:
 
     return f"<speak>{escaped}</speak>"
 
+def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
+    """
+    Distribute total_silence_sec among punctuations.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return f"<speak><break time=\"{int(total_silence_sec * 1000)}ms\"/></speak>"
+    
+    escaped = _xml_escape(raw, quote=True)
+    
+    # Identify slots: comma, period, question, exclamation
+    puncts = ["，", ",", "。", ".", "？", "?", "！", "!", "；", ";"]
+    
+    # Count occurrences
+    count = 0
+    for p in puncts:
+        count += escaped.count(p)
+        
+    if count == 0:
+        # No punctuation, append silence at end
+        return f"<speak>{escaped}<break time=\"{int(total_silence_sec * 1000)}ms\"/></speak>"
+    
+    # Distribute
+    total_ms = max(0, int(total_silence_sec * 1000))
+    avg_ms = total_ms // count
+    per_slot_add_ms = min(avg_ms, 800)
+    remaining_ms = total_ms - (per_slot_add_ms * count)
+    
+    for p in puncts:
+        # Base pause for this punct
+        base_ms = 0
+        if p in "，,": base_ms = 180
+        elif p in "。.": base_ms = 320
+        elif p in "？?": base_ms = 280
+        elif p in "！!": base_ms = 260
+        elif p in "；;": base_ms = 240
+        
+        final_ms = base_ms + per_slot_add_ms
+        replacement = f"{p}<break time=\"{final_ms}ms\"/>"
+        escaped = escaped.replace(p, replacement)
+
+    if remaining_ms > 0:
+        escaped = f"{escaped}<break time=\"{int(remaining_ms)}ms\"/>"
+
+    return f"<speak>{escaped}</speak>"
+
 class AudioGenerator:
     def __init__(self):
         if not Config.DASHSCOPE_API_KEY:
@@ -349,93 +413,195 @@ class AudioGenerator:
         
     def generate_audio(self, text: str, output_path: str):
         """
-        Convert text to speech.
+        Legacy single-file generation (still used for test or simple cases)
         """
+        return self._generate_internal(text, output_path)
+
+    def generate_aligned_audio_segments(self, segments: list, output_dir: str) -> dict:
+        """
+        Generate audio segments aligned with video duration.
+        segments: list of dict, each containing 'text', 'duration', 'asset_id'
+        Returns: dict mapping asset_id to audio_file_path
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            
+        result_map = {}
+        
+        # Pre-check engine support
+        use_v2 = Config.TTS_ENGINE in {"cosyvoice", "tts_v2"}
+        if not use_v2:
+            # Fallback for legacy engine (no SSML/Speed control)
+            for seg in segments:
+                aid = seg.get('asset_id')
+                txt = seg.get('text')
+                path = os.path.join(output_dir, f"{aid}.mp3")
+                self._generate_internal(txt, path)
+                result_map[aid] = path
+            return result_map
+
+        # Use TTS V2
+        from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
+        from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
+        
+        model = Config.TTS_MODEL or "cosyvoice-v3-flash"
+        voice = Config.TTS_VOICE or "longanyang"
+        
+        for seg in segments:
+            text = seg.get('text', '').strip()
+            video_duration = float(seg.get('duration', 5.0))
+            asset_id = seg.get('asset_id')
+            if not asset_id: 
+                continue
+                
+            final_path = os.path.join(output_dir, f"{asset_id}.mp3")
+            
+            if not text:
+                # Generate silence
+                self._generate_silence(video_duration, final_path)
+                result_map[asset_id] = final_path
+                continue
+                
+            # 1. Generate Baseline (Standard Rate, Emotional SSML)
+            # Use temp file
+            temp_base = os.path.join(output_dir, f"{asset_id}_base.mp3")
+            
+            # Use standard emotional SSML for baseline
+            baseline_ssml = _text_to_emotional_ssml(text)
+            
+            self._run_tts_v2(
+                SpeechSynthesizerV2, AudioFormat, 
+                model, voice, baseline_ssml, temp_base, 
+                enable_ssml=True, speech_rate=1.0
+            )
+            
+            audio_len = _get_audio_duration_sec(temp_base)
+            diff = video_duration - audio_len
+            
+            # Threshold 0.5s
+            if abs(diff) < 0.5:
+                # Accept baseline
+                os.replace(temp_base, final_path)
+                
+            elif diff > 0:
+                # Video > Audio: Insert Silence
+                # Use distributed SSML
+                dist_ssml = _construct_distributed_ssml(text, diff)
+                self._run_tts_v2(
+                    SpeechSynthesizerV2, AudioFormat,
+                    model, voice, dist_ssml, final_path,
+                    enable_ssml=True, speech_rate=1.0
+                )
+                if os.path.exists(temp_base):
+                    os.remove(temp_base)
+                    
+            else:
+                # Video < Audio: Speed Up
+                # ratio = audio / video
+                safe_video_duration = max(video_duration, 0.1)
+                ratio = audio_len / safe_video_duration
+                
+                # Limit max speed to 1.25
+                target_rate = min(ratio, 1.25)
+                
+                # If ratio is very small (e.g. 1.05), just speed up.
+                # If ratio is huge (e.g. 2.0), we cap at 1.25, and video will have to loop/slow-mo.
+                
+                # Generate with speed up
+                # Note: When speeding up, we should use raw text or minimal SSML to avoid double pauses?
+                # But we still want emotional prosody.
+                # Let's use the same emotional SSML but with higher global rate.
+                
+                self._run_tts_v2(
+                    SpeechSynthesizerV2, AudioFormat,
+                    model, voice, baseline_ssml, final_path,
+                    enable_ssml=True, speech_rate=target_rate
+                )
+                if os.path.exists(temp_base):
+                    os.remove(temp_base)
+            
+            result_map[asset_id] = final_path
+            
+        return result_map
+
+    def _generate_silence(self, duration: float, output_path: str):
+        # Generate silence mp3 using ffmpeg
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=mono", 
+            "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", output_path
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _run_tts_v2(self, SpeechSynthesizerV2, AudioFormat, model, voice, payload, output_path, enable_ssml=False, speech_rate=1.0):
+        audio, request_id = _call_tts_v2_once(
+            SpeechSynthesizerV2=SpeechSynthesizerV2,
+            AudioFormat=AudioFormat,
+            model=model,
+            voice=voice,
+            payload=payload,
+            enable_ssml=enable_ssml,
+            speech_rate=speech_rate
+        )
+        
+        status_code = getattr(audio, "status_code", None)
+        if status_code is None and isinstance(audio, dict):
+            status_code = audio.get("status_code")
+            
+        if status_code is not None and int(status_code) != int(HTTPStatus.OK):
+            _raise_tts_failed("TTS failed", request_id=request_id, result=audio, model=model, voice=voice)
+            
+        audio_bytes = _bytes_from_audio(audio)
+        if not audio_bytes and isinstance(audio, str):
+            audio_bytes = _maybe_decode_base64(audio)
+            
+        if audio_bytes:
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+        else:
+            raise Exception(f"TTS returned empty audio: request_id={request_id}")
+
+    def _generate_internal(self, text, output_path):
+        # Legacy support logic...
+        # Copied from original generate_audio logic
         if Config.TTS_ENGINE in {"cosyvoice", "tts_v2"}:
             try:
                 from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
                 from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
             except Exception:
-                SpeechSynthesizerV2 = None
-                AudioFormat = None
-
-            if SpeechSynthesizerV2 and AudioFormat:
+                pass
+            else:
+                # Use simple V2 call
                 model = Config.TTS_MODEL or "cosyvoice-v3-flash"
                 voice = Config.TTS_VOICE or "longanyang"
-
+                
                 chunks = _split_text_by_limit(text or "", 2000)
-                part_files: list[str] = []
+                part_files = []
                 try:
                     for idx, chunk in enumerate(chunks):
-                        attempts = []
-                        if Config.TTS_ENABLE_SSML:
-                            attempts.append(("ssml", _text_to_emotional_ssml(chunk), True))
-                        attempts.append(("text", chunk, False))
-
-                        last_result = None
-                        last_request_id = None
-                        for mode, payload, enable_ssml in attempts:
-                            audio, request_id = _call_tts_v2_once(
-                                SpeechSynthesizerV2=SpeechSynthesizerV2,
-                                AudioFormat=AudioFormat,
-                                model=model,
-                                voice=voice,
-                                payload=payload,
-                                enable_ssml=enable_ssml,
-                            )
-                            last_result = audio
-                            last_request_id = request_id
-
-                            status_code = getattr(audio, "status_code", None)
-                            if status_code is None and isinstance(audio, dict):
-                                status_code = audio.get("status_code")
-                            if status_code is not None and int(status_code) != int(HTTPStatus.OK):
-                                if mode == attempts[-1][0]:
-                                    _raise_tts_failed(
-                                        "TTS request failed",
-                                        request_id=last_request_id,
-                                        result=audio,
-                                        model=model,
-                                        voice=voice,
-                                    )
-                                continue
-
-                            audio_bytes = _bytes_from_audio(audio)
-                            if not audio_bytes and isinstance(audio, str):
-                                audio_bytes = _maybe_decode_base64(audio)
-                            if audio_bytes:
-                                if len(chunks) == 1:
-                                    with open(output_path, "wb") as f:
-                                        f.write(audio_bytes)
-                                    return output_path
-                                part_path = f"{output_path}.part{idx:04d}.mp3"
-                                with open(part_path, "wb") as f:
-                                    f.write(audio_bytes)
-                                part_files.append(part_path)
-                                break
-
-                            if mode == attempts[-1][0]:
-                                raise Exception(
-                                    f"TTS returned empty audio: request_id={last_request_id or '-'}; result={json.dumps(_as_jsonable(last_result), ensure_ascii=False)}"
-                                )
-
-                    if len(chunks) > 1:
+                        p_path = f"{output_path}.part{idx}.mp3"
+                        ssml = _text_to_emotional_ssml(chunk) if Config.TTS_ENABLE_SSML else chunk
+                        self._run_tts_v2(
+                            SpeechSynthesizerV2, AudioFormat, model, voice, 
+                            ssml, p_path, enable_ssml=Config.TTS_ENABLE_SSML
+                        )
+                        part_files.append(p_path)
+                    
+                    if len(part_files) == 1:
+                        os.rename(part_files[0], output_path)
+                    else:
                         _ffmpeg_concat_mp3(part_files, output_path)
-                        return output_path
+                    return output_path
                 finally:
                     for p in part_files:
-                        try:
-                            os.remove(p)
-                        except Exception:
-                            pass
-
+                        if os.path.exists(p): os.remove(p)
+                        
+        # Fallback to V1
         result = SpeechSynthesizer.call(
-            model=((Config.TTS_MODEL or "sambert-zh-CN-v1") if Config.TTS_ENGINE not in {"cosyvoice", "tts_v2"} else "sambert-zh-CN-v1"),
+            model="sambert-zh-CN-v1",
             text=(text or ""),
             sample_rate=48000,
             format="mp3",
         )
-
         if result.get_audio_data() is not None:
             with open(output_path, 'wb') as f:
                 f.write(result.get_audio_data())

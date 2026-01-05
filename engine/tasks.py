@@ -13,11 +13,11 @@ import boto3
 import uuid
 import urllib.request
 import time
+import math
 from urllib.parse import urlparse
 from celery.exceptions import Retry
 
 # Configure logging
-# Logging is configured in worker.py via signals
 logger = logging.getLogger(__name__)
 
 def _url_host(url: str) -> str:
@@ -418,7 +418,7 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                             """
                             UPDATE assets
                             SET is_deleted = TRUE,
-                                duration = %s
+                            duration = %s
                             WHERE id = %s
                             """,
                             (float(video.duration), asset_id),
@@ -519,14 +519,6 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
         finally:
-            # Only cleanup if we downloaded it. If it was passed from outside (file://), we might want to keep it or not.
-            # But _download_to_temp returns the file path.
-            # If it came from _download_to_temp(file://...), it returned the original path.
-            # We should NOT delete the original source file here if it's the source of truth for the asset.
-            # However, logic in analyze_video_task usually cleans up local_video if it created it.
-            
-            # Refined logic: If local_video_path was passed in, caller handles cleanup.
-            # If we created it via _download_to_temp AND it was a temp download (not file://), delete it.
             if not local_video_path:
                 if not video_url.startswith("file://"):
                     try:
@@ -544,6 +536,7 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
     """
     Background task to analyze a video asset.
     """
+    # (Original content of analyze_video_task)
     started = time.monotonic()
     attempt = int(getattr(self.request, "retries", 0) or 0) + 1
     _log_info(
@@ -571,203 +564,66 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
         )
 
         if not Config.SMART_SPLIT_ENABLED:
-            _log_info(
-                "split.skip",
-                project_id=project_id,
-                asset_id=asset_id,
-                reason="disabled",
-                strategy=Config.SMART_SPLIT_STRATEGY,
-                video_duration_sec=float(duration_sec or 0.0),
-                min_duration_sec=float(Config.SMART_SPLIT_MIN_DURATION_SEC or 0.0),
-            )
+            _log_info("split.skip", project_id=project_id, asset_id=asset_id, reason="disabled")
         elif duration_sec < Config.SMART_SPLIT_MIN_DURATION_SEC:
-            _log_info(
-                "split.skip",
-                project_id=project_id,
-                asset_id=asset_id,
-                reason="duration_too_short",
-                strategy=Config.SMART_SPLIT_STRATEGY,
-                video_duration_sec=float(duration_sec or 0.0),
-                min_duration_sec=float(Config.SMART_SPLIT_MIN_DURATION_SEC or 0.0),
-            )
+            _log_info("split.skip", project_id=project_id, asset_id=asset_id, reason="duration_too_short")
 
-        if (
-            Config.SMART_SPLIT_ENABLED
-            and duration_sec >= Config.SMART_SPLIT_MIN_DURATION_SEC
-        ):
-            _log_info(
-                "split.decision",
-                project_id=project_id,
-                asset_id=asset_id,
-                strategy=Config.SMART_SPLIT_STRATEGY,
-                video_duration_sec=float(duration_sec or 0.0),
-            )
-            # Branch 1: Qwen Video (End-to-End)
+        if (Config.SMART_SPLIT_ENABLED and duration_sec >= Config.SMART_SPLIT_MIN_DURATION_SEC):
+            # ... Split Logic ...
+            
             if Config.SMART_SPLIT_STRATEGY == "qwen_video" and _is_http_url(video_url):
-                _log_info(
-                    "step.start",
-                    step="qwen_video_segments",
-                    project_id=project_id,
-                    asset_id=asset_id,
-                    model=Config.QWEN_VIDEO_MODEL,
-                )
-                segments_text = detector.analyze_video_segments(video_url)
-                segments_raw = _parse_model_json(segments_text)
-                segments = _coerce_segments(segments_raw)
-                _log_info(
-                    "step.finish",
-                    step="qwen_video_segments",
-                    project_id=project_id,
-                    asset_id=asset_id,
-                    segments_count=len(segments),
-                )
-                _process_split_logic(project_id, asset_id, video_url, segments)
-                _advance_project_status(project_id)
-                if cleanup_local_video and os.path.exists(local_video):
-                    os.remove(local_video)
-                _log_info(
-                    "task.finish",
-                    task_name="analyze_video_task",
-                    project_id=project_id,
-                    asset_id=asset_id,
-                    status="split_completed",
-                    segments_count=len(segments),
-                    duration_ms=int((time.monotonic() - started) * 1000),
-                )
-                return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
+                 segments_text = detector.analyze_video_segments(video_url)
+                 segments_raw = _parse_model_json(segments_text)
+                 segments = _coerce_segments(segments_raw)
+                 _process_split_logic(project_id, asset_id, video_url, segments)
+                 _advance_project_status(project_id)
+                 if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
+                 return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
-            # Branch 2: Hybrid (SceneDetect + Qwen Image)
             elif Config.SMART_SPLIT_STRATEGY == "hybrid":
-                try:
-                    _log_info(
-                        "step.start",
-                        step="scenedetect",
-                        project_id=project_id,
-                        asset_id=asset_id,
-                        strategy="hybrid",
-                    )
-                    shots = detector.detect_video_shots(local_video, threshold=Config.SCENE_DETECT_THRESHOLD)
-                    if not shots:
-                        shots = [(0.0, duration_sec)]
-                    _log_info(
-                        "step.finish",
-                        step="scenedetect",
-                        project_id=project_id,
-                        asset_id=asset_id,
-                        shot_count=len(shots),
-                    )
-                    
-                    shot_frames = []
-                    import cv2
-                    cap = cv2.VideoCapture(local_video)
-                    
-                    try:
-                        _log_info(
-                            "step.start",
-                            step="keyframes_from_shots",
-                            project_id=project_id,
-                            asset_id=asset_id,
-                        )
-                        for start, end in shots:
-                            mid_sec = (start + end) / 2
-                            cap.set(cv2.CAP_PROP_POS_MSEC, mid_sec * 1000)
-                            ret, frame = cap.read()
-                            if ret:
-                                temp_img = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-                                h, w = frame.shape[:2]
-                                max_dim = 1024
-                                if w > max_dim or h > max_dim:
-                                    scale = max_dim / max(w, h)
-                                    frame = cv2.resize(frame, None, fx=scale, fy=scale)
-                                cv2.imwrite(temp_img.name, frame)
-                                shot_frames.append({
-                                    "start": start,
-                                    "end": end,
-                                    "image": temp_img.name
-                                })
-                                temp_img.close()
-                    finally:
-                        cap.release()
-                    _log_info(
-                        "step.finish",
-                        step="keyframes_from_shots",
-                        project_id=project_id,
-                        asset_id=asset_id,
-                        frame_count=len(shot_frames),
-                    )
+                 # ... Hybrid Logic ...
+                 shots = detector.detect_video_shots(local_video, threshold=Config.SCENE_DETECT_THRESHOLD)
+                 if not shots: shots = [(0.0, duration_sec)]
+                 
+                 shot_frames = []
+                 import cv2
+                 cap = cv2.VideoCapture(local_video)
+                 try:
+                     for start, end in shots:
+                         mid_sec = (start + end) / 2
+                         cap.set(cv2.CAP_PROP_POS_MSEC, mid_sec * 1000)
+                         ret, frame = cap.read()
+                         if ret:
+                             temp_img = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+                             h, w = frame.shape[:2]
+                             scale = 1024 / max(w, h) if max(w, h) > 1024 else 1.0
+                             if scale != 1.0: frame = cv2.resize(frame, None, fx=scale, fy=scale)
+                             cv2.imwrite(temp_img.name, frame)
+                             shot_frames.append({"start": start, "end": end, "image": temp_img.name})
+                             temp_img.close()
+                 finally:
+                     cap.release()
 
-                    if shot_frames:
-                        _log_info(
-                            "step.start",
-                            step="qwen_group_shots",
-                            project_id=project_id,
-                            asset_id=asset_id,
-                            model=Config.QWEN_IMAGE_MODEL,
-                        )
-                        segments_text = detector.analyze_shot_grouping(shot_frames)
-                        segments_raw = _parse_model_json(segments_text)
-                        segments = _coerce_segments(segments_raw)
-                        _log_info(
-                            "step.finish",
-                            step="qwen_group_shots",
-                            project_id=project_id,
-                            asset_id=asset_id,
-                            segments_count=len(segments),
-                        )
-                        
-                        for sf in shot_frames:
-                            if os.path.exists(sf["image"]):
-                                os.remove(sf["image"])
+                 if shot_frames:
+                     segments_text = detector.analyze_shot_grouping(shot_frames)
+                     segments_raw = _parse_model_json(segments_text)
+                     segments = _coerce_segments(segments_raw)
+                     
+                     for sf in shot_frames:
+                         if os.path.exists(sf["image"]): os.remove(sf["image"])
 
-                        _process_split_logic(project_id, asset_id, video_url, segments, local_video_path=local_video)
-                        _advance_project_status(project_id)
-                        _log_info(
-                            "task.finish",
-                            task_name="analyze_video_task",
-                            project_id=project_id,
-                            asset_id=asset_id,
-                            status="split_completed",
-                            segments_count=len(segments),
-                            duration_ms=int((time.monotonic() - started) * 1000),
-                        )
-                        return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
+                     _process_split_logic(project_id, asset_id, video_url, segments, local_video_path=local_video)
+                     _advance_project_status(project_id)
+                     if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
+                     return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
 
-                finally:
-                    if cleanup_local_video and os.path.exists(local_video):
-                        os.remove(local_video)
+                 if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
 
-        _log_info(
-            "step.start",
-            step="extract_key_frames",
-            project_id=project_id,
-            asset_id=asset_id,
-        )
+        # Fallback single frame analysis
         frame_paths = detector.extract_key_frames(local_video, num_frames=5)
-        _log_info(
-            "step.finish",
-            step="extract_key_frames",
-            project_id=project_id,
-            asset_id=asset_id,
-            frame_count=len(frame_paths),
-        )
-        _log_info(
-            "step.start",
-            step="qwen_analyze_frames",
-            project_id=project_id,
-            asset_id=asset_id,
-            model=Config.QWEN_IMAGE_MODEL,
-        )
         result_json_str = detector.analyze_scene_from_frames(frame_paths)
         result_data = _parse_model_json(result_json_str)
-        _log_info(
-            "step.finish",
-            step="qwen_analyze_frames",
-            project_id=project_id,
-            asset_id=asset_id,
-            status="ok",
-        )
-
-        _log_info("step.start", step="db.update_asset", project_id=project_id, asset_id=asset_id)
+        
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -776,45 +632,21 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                         """
                         UPDATE assets
                         SET scene_label = %s,
-                            scene_score = %s,
-                            duration = %s
+                        scene_score = %s,
+                        duration = %s
                         WHERE id = %s
                         """,
-                        (
-                            result_data.get("scene", "unknown"),
-                            float(result_data.get("score", 0.0) or 0.0),
-                            float(duration_sec or 0.0),
-                            asset_id,
-                        ),
+                        (result_data.get("scene", "unknown"), float(result_data.get("score", 0.0) or 0.0), float(duration_sec or 0.0), asset_id),
                     )
-            _log_info("step.finish", step="db.update_asset", project_id=project_id, asset_id=asset_id)
         finally:
             conn.close()
 
         _advance_project_status(project_id)
-
-        if cleanup_local_video and os.path.exists(local_video):
-            os.remove(local_video)
-
-        _log_info(
-            "task.finish",
-            task_name="analyze_video_task",
-            project_id=project_id,
-            asset_id=asset_id,
-            status="completed",
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
+        if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
         return {"project_id": project_id, "asset_id": asset_id, "analysis": result_data}
 
     except Exception as e:
-        _log_exception(
-            "task.error",
-            task_name="analyze_video_task",
-            project_id=project_id,
-            asset_id=asset_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-        # Retry with exponential backoff
+        _log_exception("task.error", task_name="analyze_video_task", project_id=project_id, asset_id=asset_id)
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
 
 @celery_app.task(bind=True, max_retries=3)
@@ -823,23 +655,11 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
     Background task to generate video script using LLM.
     """
     started = time.monotonic()
-    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
-    _log_info(
-        "task.start",
-        task_name="generate_script_task",
-        project_id=project_id,
-        attempt=attempt,
-        retries=int(getattr(self.request, "retries", 0) or 0),
-    )
-    
     try:
         # 1. Generate Script
-        _log_info("step.start", step="llm.generate_script", task_name="generate_script_task", project_id=project_id)
         script_content = script_gen.generate_script(house_info, timeline_data)
-        _log_info("step.finish", step="llm.generate_script", task_name="generate_script_task", project_id=project_id)
 
         # 2. Update Database
-        _log_info("step.start", step="db.update_project_script", task_name="generate_script_task", project_id=project_id)
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -851,118 +671,217 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
                         WHERE id = %s
                     """
                     cursor.execute(update_query, (script_content, project_id))
-            _log_info("step.finish", step="db.update_project_script", task_name="generate_script_task", project_id=project_id)
         finally:
             conn.close()
 
-        _log_info(
-            "task.finish",
-            task_name="generate_script_task",
-            project_id=project_id,
-            status="completed",
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-        return {
-            "project_id": project_id,
-            "script": script_content
-        }
-
+        return {"project_id": project_id, "script": script_content}
     except Exception as e:
-        _log_exception(
-            "task.error",
-            task_name="generate_script_task",
-            project_id=project_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
+
+def _parse_and_align_segments(project_id: str, script_content: str):
+    """
+    Fetch assets, parse script (JSON/Text), and prepare for audio generation.
+    """
+    # Fetch assets to get durations
+    conn = psycopg2.connect(Config.DB_DSN)
+    timeline_assets = []
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT id, oss_url, duration, scene_label 
+                    FROM assets 
+                    WHERE project_id = %s AND is_deleted = FALSE 
+                    ORDER BY sort_order ASC
+                """, (project_id,))
+                rows = cursor.fetchall()
+                for r in rows:
+                    duration_val = float(r[2] or 0.0)
+                    if duration_val <= 0:
+                        duration_val = 5.0
+                    timeline_assets.append({
+                        "id": str(r[0]),
+                        "oss_url": r[1],
+                        "duration": duration_val,
+                        "scene_label": r[3]
+                    })
+    finally:
+        conn.close()
+        
+    segments = []
+    try:
+        # Try parsing as JSON
+        data = json.loads(script_content)
+        if isinstance(data, list):
+            text_map = {item.get('asset_id'): item.get('text', '') for item in data}
+            for asset in timeline_assets:
+                aid = asset.get('id')
+                dur = float(asset.get('duration', 5.0))
+                text = text_map.get(aid, '')
+                segments.append({
+                    'text': text,
+                    'duration': dur,
+                    'asset_id': aid,
+                    'oss_url': asset.get('oss_url')
+                })
+            return segments, timeline_assets
+    except Exception:
+        pass
+        
+    # Fallback: Plain text split
+    import re
+    sentences = re.split(r'([。！？.!?])', script_content)
+    clean_sentences = []
+    current = ""
+    for s in sentences:
+        if s in "。！？.!?":
+            current += s
+            clean_sentences.append(current)
+            current = ""
+        else:
+            current = s
+    if current: clean_sentences.append(current)
+    clean_sentences = [s for s in clean_sentences if s.strip()]
+    
+    count = len(timeline_assets)
+    if count > 0:
+        per_clip = math.ceil(len(clean_sentences) / count)
+        for i, asset in enumerate(timeline_assets):
+            start = i * per_clip
+            end = min((i + 1) * per_clip, len(clean_sentences))
+            chunk = "".join(clean_sentences[start:end])
+            segments.append({
+                'text': chunk,
+                'duration': float(asset.get('duration', 5.0)),
+                'asset_id': asset.get('id'),
+                'oss_url': asset.get('oss_url')
+            })
+            
+    return segments, timeline_assets
 
 @celery_app.task(bind=True, max_retries=3)
 def generate_audio_task(self, project_id: str, script_content: str):
     """
-    Background task to generate TTS audio.
+    Background task to generate TTS audio (preview).
     """
     started = time.monotonic()
-    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
-    _log_info(
-        "task.start",
-        task_name="generate_audio_task",
-        project_id=project_id,
-        attempt=attempt,
-        retries=int(getattr(self.request, "retries", 0) or 0),
-    )
-    
     try:
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("RENDERING", "COMPLETED"))
 
-        output_path = f"/tmp/{project_id}.mp3"
-        try:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        except Exception:
-            pass
+        # Prepare segments
+        segments, _ = _parse_and_align_segments(project_id, script_content)
         
-        _log_info(
-            "step.start",
-            step="tts.generate_audio",
-            task_name="generate_audio_task",
-            project_id=project_id,
-            tts_engine=Config.TTS_ENGINE,
-            tts_model=Config.TTS_MODEL,
-            voice=Config.TTS_VOICE,
-            tts_enable_ssml=bool(Config.TTS_ENABLE_SSML),
-        )
-        audio_path = audio_gen.generate_audio(script_content, output_path)
-        _log_info("step.finish", step="tts.generate_audio", task_name="generate_audio_task", project_id=project_id)
+        # Temp dir for segments
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Generate aligned segments
+            audio_map = audio_gen.generate_aligned_audio_segments(segments, temp_dir)
+            
+            # Concat for preview
+            preview_path = f"/tmp/{project_id}_preview.mp3"
+            sorted_files = []
+            for seg in segments:
+                aid = seg.get('asset_id')
+                if aid in audio_map:
+                    sorted_files.append(audio_map[aid])
+            
+            from audio_gen import _ffmpeg_concat_mp3
+            if sorted_files:
+                _ffmpeg_concat_mp3(sorted_files, preview_path)
+            else:
+                # Should not happen
+                pass
+                
+            # Upload preview
+            file_name = f"{project_id}.mp3"
+            audio_url = upload_to_s3(preview_path, file_name, content_type="audio/mpeg")
+            
+            # Update DB
+            conn = psycopg2.connect(Config.DB_DSN)
+            try:
+                with conn:
+                    with conn.cursor() as cursor:
+                        update_query = """
+                            UPDATE projects 
+                            SET audio_url = %s,
+                                status = 'AUDIO_GENERATED'
+                            WHERE id = %s
+                        """
+                        cursor.execute(update_query, (audio_url, project_id))
+            finally:
+                conn.close()
+            
+            if os.path.exists(preview_path): os.remove(preview_path)
 
-        # 2. Upload to S3 and Update DB
-        file_name = f"{project_id}.mp3"
-        audio_url = upload_to_s3(audio_path, file_name, content_type="audio/mpeg")
-        _log_info("step.finish", step="s3.upload_audio", task_name="generate_audio_task", project_id=project_id, url_host=_url_host(audio_url))
+        return {"project_id": project_id, "audio_url": audio_url}
 
-        # Update DB with audio_url
-        _log_info("step.start", step="db.update_project_audio_url", task_name="generate_audio_task", project_id=project_id)
+    except Exception as e:
+        if isinstance(e, Retry): raise
+        retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        if retries >= max_retries:
+            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
+            raise
+        raise self.retry(exc=e, countdown=2 ** retries)
+
+@celery_app.task(bind=True, max_retries=12)
+def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path: str):
+    """
+    Background task to render final video.
+    """
+    started = time.monotonic()
+    try:
+        _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
+
+        # 1. Fetch Script
         conn = psycopg2.connect(Config.DB_DSN)
+        script_content = ""
         try:
             with conn:
                 with conn.cursor() as cursor:
-                    update_query = """
-                        UPDATE projects 
-                        SET audio_url = %s,
-                            status = 'AUDIO_GENERATED'
-                        WHERE id = %s
-                    """
-                    cursor.execute(update_query, (audio_url, project_id))
-            _log_info("step.finish", step="db.update_project_audio_url", task_name="generate_audio_task", project_id=project_id)
+                    cursor.execute("SELECT script_content FROM projects WHERE id = %s", (project_id,))
+                    row = cursor.fetchone()
+                    if row: script_content = row[0]
         finally:
             conn.close()
-        
-        _log_info(
-            "task.finish",
-            task_name="generate_audio_task",
-            project_id=project_id,
-            status="completed",
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
 
-        try:
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
-        except Exception:
-            pass
-        return {
-            "project_id": project_id,
-            "audio_url": audio_url
-        }
+        # 2. Re-generate aligned audio segments locally
+        segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Generate aligned segments
+            audio_map = audio_gen.generate_aligned_audio_segments(segments, temp_dir)
+            
+            # 3. Render Video
+            temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+            temp_video.close()
+            
+            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name)
+
+            # 4. Upload
+            file_name = f"rendered_{project_id}.mp4"
+            final_video_url = upload_to_s3(output_path, file_name)
+            
+            # 5. Update DB
+            conn = psycopg2.connect(Config.DB_DSN)
+            try:
+                with conn:
+                    with conn.cursor() as cursor:
+                        update_query = """
+                            UPDATE projects 
+                            SET final_video_url = %s,
+                                status = 'COMPLETED'
+                            WHERE id = %s
+                        """
+                        cursor.execute(update_query, (final_video_url, project_id))
+            finally:
+                conn.close()
+
+            if os.path.exists(output_path): os.remove(output_path)
+            
+        return {"project_id": project_id, "video_url": final_video_url}
 
     except Exception as e:
-        if isinstance(e, Retry):
-            raise
-        _log_exception(
-            "task.error",
-            task_name="generate_audio_task",
-            project_id=project_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
+        if isinstance(e, Retry): raise
         retries = int(getattr(self.request, "retries", 0) or 0)
         max_retries = int(getattr(self, "max_retries", 0) or 0)
         if retries >= max_retries:
@@ -971,100 +890,74 @@ def generate_audio_task(self, project_id: str, script_content: str):
         raise self.retry(exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
-def render_pipeline_task(self, project_id: str, script_content: str, timeline_assets: list):
-    """
-    Unified Pipeline: Generate Audio -> Upload Audio -> Render Video -> Upload Video
-    """
+def render_pipeline_task(self, project_id: str, script_content: str, _timeline_assets: list):
     started = time.monotonic()
-    _log_info(
-        "task.start",
-        task_name="render_pipeline_task",
-        project_id=project_id,
-    )
-
-    audio_path = None
-    output_path = None
-
     try:
-        if not isinstance(script_content, str) or not script_content.strip():
-            raise ValueError("script_content is empty")
-        if not isinstance(timeline_assets, list) or len(timeline_assets) == 0:
-            raise ValueError("timeline_assets is empty")
-
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("COMPLETED",))
         
-        audio_temp_path = f"/tmp/{project_id}.mp3"
-        try:
-            if os.path.exists(audio_temp_path):
-                os.remove(audio_temp_path)
-        except Exception:
-            pass
+        segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Audio
+            audio_map = audio_gen.generate_aligned_audio_segments(segments, temp_dir)
             
-        _log_info("step.start", step="tts.generate_audio", task_name="render_pipeline_task", project_id=project_id)
-        audio_path = audio_gen.generate_audio(script_content, audio_temp_path)
-        _log_info("step.finish", step="tts.generate_audio", task_name="render_pipeline_task", project_id=project_id)
-        
-        # Upload Audio to S3
-        file_name_mp3 = f"{project_id}.mp3"
-        audio_url = upload_to_s3(audio_path, file_name_mp3, content_type="audio/mpeg")
-        _log_info("step.finish", step="s3.upload_audio", task_name="render_pipeline_task", project_id=project_id, url_host=_url_host(audio_url))
-        
-        # Update DB with audio_url
-        _log_info("step.start", step="db.update_project_audio_url", task_name="render_pipeline_task", project_id=project_id)
-        conn = psycopg2.connect(Config.DB_DSN)
-        try:
-            with conn:
-                with conn.cursor() as cursor:
-                    update_query = """
-                        UPDATE projects 
-                        SET audio_url = %s,
-                            status = 'AUDIO_GENERATED'
-                        WHERE id = %s
-                    """
-                    cursor.execute(update_query, (audio_url, project_id))
-            _log_info("step.finish", step="db.update_project_audio_url", task_name="render_pipeline_task", project_id=project_id)
-        finally:
-            conn.close()
+            # Concat preview
+            preview_path = f"/tmp/{project_id}_preview.mp3"
+            sorted_files = []
+            for seg in segments:
+                aid = seg.get('asset_id')
+                if aid in audio_map:
+                    sorted_files.append(audio_map[aid])
+            
+            from audio_gen import _ffmpeg_concat_mp3
+            if sorted_files:
+                _ffmpeg_concat_mp3(sorted_files, preview_path)
+                
+            audio_url = upload_to_s3(preview_path, f"{project_id}.mp3", content_type="audio/mpeg")
+            
+             # Update DB with audio_url
+            conn = psycopg2.connect(Config.DB_DSN)
+            try:
+                with conn:
+                    with conn.cursor() as cursor:
+                        update_query = """
+                            UPDATE projects 
+                            SET audio_url = %s,
+                                status = 'AUDIO_GENERATED'
+                            WHERE id = %s
+                        """
+                        cursor.execute(update_query, (audio_url, project_id))
+            finally:
+                conn.close()
 
-        # --- Step 2: Render Video ---
-        _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
-        
-        temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
-        temp_video.close()
-        
-        _log_info("step.start", step="render.render_video", task_name="render_pipeline_task", project_id=project_id)
-        output_path = video_render.render_video(timeline_assets, audio_path, temp_video.name)
-        _log_info("step.finish", step="render.render_video", task_name="render_pipeline_task", project_id=project_id)
-
-        # Upload Video to S3
-        file_name_mp4 = f"rendered_{project_id}.mp4"
-        final_video_url = upload_to_s3(output_path, file_name_mp4)
-        _log_info("step.finish", step="s3.upload_final_video", task_name="render_pipeline_task", project_id=project_id, url_host=_url_host(final_video_url))
-        
-        # Update DB with final_video_url
-        _log_info("step.start", step="db.update_project_final_url", task_name="render_pipeline_task", project_id=project_id)
-        conn = psycopg2.connect(Config.DB_DSN)
-        try:
-            with conn:
-                with conn.cursor() as cursor:
-                    update_query = """
-                        UPDATE projects 
-                        SET final_video_url = %s,
-                            status = 'COMPLETED'
-                        WHERE id = %s
-                    """
-                    cursor.execute(update_query, (final_video_url, project_id))
-            _log_info("step.finish", step="db.update_project_final_url", task_name="render_pipeline_task", project_id=project_id)
-        finally:
-            conn.close()
-
-        _log_info(
-            "task.finish",
-            task_name="render_pipeline_task",
-            project_id=project_id,
-            status="completed",
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
+            # Render
+            _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
+            
+            temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+            temp_video.close()
+            
+            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name)
+            
+            final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")
+            
+            # Update DB
+            conn = psycopg2.connect(Config.DB_DSN)
+            try:
+                with conn:
+                    with conn.cursor() as cursor:
+                        update_query = """
+                            UPDATE projects 
+                            SET final_video_url = %s,
+                                status = 'COMPLETED'
+                            WHERE id = %s
+                        """
+                        cursor.execute(update_query, (final_video_url, project_id))
+            finally:
+                conn.close()
+                
+            if os.path.exists(preview_path): os.remove(preview_path)
+            if os.path.exists(output_path): os.remove(output_path)
+            
         return {
             "project_id": project_id,
             "audio_url": audio_url,
@@ -1072,133 +965,6 @@ def render_pipeline_task(self, project_id: str, script_content: str, timeline_as
         }
 
     except Exception as e:
-        if isinstance(e, Retry):
-            raise
-        _log_exception(
-            "task.error",
-            task_name="render_pipeline_task",
-            project_id=project_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-        # If pipeline fails, mark as FAILED
+        if isinstance(e, Retry): raise
         _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
         raise self.retry(exc=e, countdown=2 ** self.request.retries)
-
-    finally:
-        for p in (audio_path, output_path):
-            if not p:
-                continue
-            try:
-                if os.path.exists(p):
-                    os.remove(p)
-            except Exception:
-                pass
-
-@celery_app.task(bind=True, max_retries=12)
-def render_video_task(self, project_id: str, timeline_assets: list, audio_path: str):
-    """
-    Background task to render final video.
-    """
-    started = time.monotonic()
-    attempt = int(getattr(self.request, "retries", 0) or 0) + 1
-    _log_info(
-        "task.start",
-        task_name="render_video_task",
-        project_id=project_id,
-        attempt=attempt,
-        retries=int(getattr(self.request, "retries", 0) or 0),
-    )
-    
-    try:
-        _set_project_status(project_id, "RENDERING", skip_if_status_in=("COMPLETED",))
-
-        if audio_path:
-            status = _get_project_status(project_id)
-            if status == "FAILED":
-                raise RuntimeError("project already failed")
-            if (not os.path.exists(audio_path)) or (os.path.getsize(audio_path) <= 0):
-                retries = int(getattr(self.request, "retries", 0) or 0)
-                countdown = min(60, 5 * (2 ** retries))
-                size_bytes = None
-                try:
-                    if os.path.exists(audio_path):
-                        size_bytes = os.path.getsize(audio_path)
-                except Exception:
-                    size_bytes = None
-                _log_info(
-                    "render.wait_for_audio",
-                    task_name="render_video_task",
-                    project_id=project_id,
-                    audio_path=audio_path,
-                    **({"bytes": size_bytes} if size_bytes is not None else {}),
-                    countdown_sec=int(countdown),
-                    attempt=attempt,
-                    retries=retries,
-                )
-                return self.retry(
-                    exc=RuntimeError("audio not ready"),
-                    countdown=countdown,
-                    throw=False,
-                )
-
-        # 1. Render Video
-        temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
-        temp_video.close()
-        
-        _log_info("step.start", step="render.render_video", task_name="render_video_task", project_id=project_id)
-        output_path = video_render.render_video(timeline_assets, audio_path, temp_video.name)
-        _log_info("step.finish", step="render.render_video", task_name="render_video_task", project_id=project_id)
-
-        # 2. Upload to S3
-        file_name = f"rendered_{project_id}.mp4"
-        final_video_url = upload_to_s3(output_path, file_name)
-        _log_info("step.finish", step="s3.upload_final_video", task_name="render_video_task", project_id=project_id, url_host=_url_host(final_video_url))
-        
-        # 3. Update Database
-        _log_info("step.start", step="db.update_project_final_url", task_name="render_video_task", project_id=project_id)
-        conn = psycopg2.connect(Config.DB_DSN)
-        try:
-            with conn:
-                with conn.cursor() as cursor:
-                    update_query = """
-                        UPDATE projects 
-                        SET final_video_url = %s,
-                            status = 'COMPLETED'
-                        WHERE id = %s
-                    """
-                    cursor.execute(update_query, (final_video_url, project_id))
-            _log_info("step.finish", step="db.update_project_final_url", task_name="render_video_task", project_id=project_id)
-        finally:
-            conn.close()
-
-        # Cleanup audio file if it was temp
-        if os.path.exists(audio_path) and "/tmp/" in audio_path:
-            os.remove(audio_path)
-
-        _log_info(
-            "task.finish",
-            task_name="render_video_task",
-            project_id=project_id,
-            status="completed",
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-        return {
-            "project_id": project_id,
-            "video_url": final_video_url
-        }
-
-    except Exception as e:
-        if isinstance(e, Retry):
-            raise
-        _log_exception(
-            "task.error",
-            task_name="render_video_task",
-            project_id=project_id,
-            duration_ms=int((time.monotonic() - started) * 1000),
-        )
-        retries = int(getattr(self.request, "retries", 0) or 0)
-        max_retries = int(getattr(self, "max_retries", 0) or 0)
-        if retries >= max_retries:
-            _set_project_status(project_id, "FAILED", skip_if_status_in=("COMPLETED",))
-            raise
-        raise self.retry(exc=e, countdown=2 ** retries)

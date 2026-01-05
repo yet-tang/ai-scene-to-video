@@ -146,10 +146,11 @@ public class ProjectService {
         // Convert assets to simple list of maps/objects for Python
         List<Object> timelineData = assets.stream().map(asset -> {
             Map<String, Object> map = new HashMap<>();
-            map.put("asset_id", asset.getId().toString());
+            map.put("id", asset.getId().toString());
             map.put("scene_label", asset.getSceneLabel());
             map.put("scene_score", asset.getSceneScore());
             map.put("oss_url", asset.getOssUrl());
+            map.put("duration", asset.getDuration());
             return map;
         }).collect(Collectors.toList());
 
@@ -204,6 +205,7 @@ public class ProjectService {
         // Prepare data for rendering
         List<Object> timelineAssets = assets.stream().map(asset -> {
             Map<String, Object> map = new HashMap<>();
+            map.put("id", asset.getId().toString());
             map.put("oss_url", asset.getOssUrl());
             map.put("duration", asset.getDuration());
             return map;

@@ -123,6 +123,7 @@ class ProjectServiceTest {
                 .sceneLabel("客厅")
                 .sceneScore(0.9)
                 .ossUrl("u")
+                .duration(3.0)
                 .build();
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(asset));
 
@@ -137,10 +138,11 @@ class ProjectServiceTest {
         assertThat(timelineData).hasSize(1);
         assertThat(timelineData.get(0)).isInstanceOf(Map.class);
         Map<?, ?> map = (Map<?, ?>) timelineData.get(0);
-        assertThat(map.get("asset_id")).isEqualTo(asset.getId().toString());
+        assertThat(map.get("id")).isEqualTo(asset.getId().toString());
         assertThat(map.get("scene_label")).isEqualTo("客厅");
         assertThat(map.get("scene_score")).isEqualTo(0.9);
         assertThat(map.get("oss_url")).isEqualTo("u");
+        assertThat(map.get("duration")).isEqualTo(3.0);
     }
 
     @Test
@@ -166,8 +168,8 @@ class ProjectServiceTest {
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Asset a1 = Asset.builder().ossUrl("u1").duration(1.0).build();
-        Asset a2 = Asset.builder().ossUrl("u2").duration(2.0).build();
+        Asset a1 = Asset.builder().id(UUID.randomUUID()).ossUrl("u1").duration(1.0).build();
+        Asset a2 = Asset.builder().id(UUID.randomUUID()).ossUrl("u2").duration(2.0).build();
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(a1, a2));
 
         projectService.renderVideo(projectId);

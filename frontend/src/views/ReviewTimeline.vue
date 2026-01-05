@@ -119,6 +119,12 @@
               </div>
 
               <div class="script-box">
+                <div class="script-header">
+                    <span class="script-label">解说词</span>
+                    <span class="script-budget" :class="{ warning: (element.script || '').length > Math.floor(element.duration * 4) }">
+                        {{ (element.script || '').length }} / {{ Math.floor(element.duration * 4) }} 字
+                    </span>
+                </div>
                 <van-field
                   v-model="element.script"
                   rows="2"
@@ -267,7 +273,7 @@ onMounted(async () => {
 
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
-    const distributedScripts = distributeScript(globalScript, storeAssets.length)
+    const distributedScripts = distributeScript(globalScript, storeAssets.length, storeAssets)
     assets.value = storeAssets.map((a, i) => ({
       ...a,
       script: distributedScripts[i] || ''
@@ -296,7 +302,7 @@ const loadData = async () => {
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
     
-    const distributedScripts = distributeScript(globalScript, storeAssets.length)
+    const distributedScripts = distributeScript(globalScript, storeAssets.length, storeAssets)
     
     assets.value = storeAssets.map((a, i) => ({
         ...a,
@@ -393,9 +399,30 @@ const processShowProgress = computed(() => {
   return true
 })
 
-const distributeScript = (text: string, count: number): string[] => {
+const distributeScript = (text: string, count: number, assetsList: Asset[] = []): string[] => {
     if (count <= 0) return []
     if (!text) return new Array(count).fill('')
+    
+    // Try parse JSON
+    try {
+        const data = JSON.parse(text)
+        if (Array.isArray(data)) {
+            // Map by asset_id
+            const map: Record<string, string> = {}
+            data.forEach(item => {
+                if (item.asset_id) map[item.asset_id] = item.text || ''
+            })
+            
+            // Return array matching assetsList order
+            if (assetsList.length > 0) {
+                return assetsList.map(a => map[a.id] || '')
+            } else {
+                return data.map((item: any) => item.text || '').slice(0, count)
+            }
+        }
+    } catch (e) {
+        // Not JSON, fall through
+    }
     
     const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
     
@@ -533,7 +560,7 @@ const startScriptPolling = () => {
     await projectStore.fetchProject(projectId)
     if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
       const fullScript = projectStore.currentProject.script
-      const parts = distributeScript(fullScript, assets.value.length)
+      const parts = distributeScript(fullScript, assets.value.length, assets.value)
       assets.value.forEach((a, i) => {
         if (parts[i]) a.script = parts[i]
       })
@@ -643,12 +670,19 @@ const onGenerateVideo = async () => {
     router.push(`/result/${projectId}?mock=1&mockStatus=loading`)
     return
   }
-  const combinedScript = assets.value.map(a => a.script).join('\n')
   
-  if (!combinedScript.trim()) {
+  const scriptSegments = assets.value.map(a => ({
+      asset_id: a.id,
+      text: a.script || ''
+  }))
+  const hasText = scriptSegments.some(s => s.text.trim().length > 0)
+  
+  if (!hasText) {
     showToast('请先生成或填写解说词')
     return
   }
+  
+  const combinedScript = JSON.stringify(scriptSegments)
   
   isRendering.value = true
   try {
@@ -924,6 +958,28 @@ const onGenerateVideo = async () => {
 
 .script-box {
     margin-top: 4px;
+}
+
+.script-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    padding: 0 4px;
+}
+
+.script-label {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.script-budget {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.script-budget.warning {
+    color: #ff976a;
 }
 
 .clip-script-input {
