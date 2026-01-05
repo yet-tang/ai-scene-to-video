@@ -19,6 +19,9 @@
             <div class="van-ellipsis font-bold">{{ project.title }}</div>
             <div class="text-xs text-gray-500">ID: {{ project.id }}</div>
             <div class="text-xs text-gray-500">{{ formatDate(project.createdAt) }}</div>
+            <div v-if="project.status === 'FAILED' && project.errorRequestId" class="text-xs text-gray-500">
+              Trace: {{ project.errorRequestId }}
+            </div>
           </template>
           <template #value>
             <van-tag :type="getStatusType(project.status)">{{ project.status }}</van-tag>
@@ -45,6 +48,9 @@ interface ProjectListItem {
   title: string
   status: string
   createdAt: string
+  errorRequestId?: string
+  errorStep?: string
+  errorAt?: string
 }
 
 const router = useRouter()

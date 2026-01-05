@@ -20,4 +20,7 @@ public class ProjectListItemResponse {
     private ProjectStatus status;
     private JsonNode houseInfo;
     private LocalDateTime createdAt;
+    private String errorRequestId;
+    private String errorStep;
+    private LocalDateTime errorAt;
 }

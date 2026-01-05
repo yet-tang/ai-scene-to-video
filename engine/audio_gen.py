@@ -11,6 +11,12 @@ import subprocess
 import tempfile
 import urllib.request
 import math
+import logging
+from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+import time
+
+logger = logging.getLogger(__name__)
 
 def _format_tts_error(result) -> str:
     parts = []
@@ -90,10 +96,61 @@ def _download_audio_url(url: str) -> bytes | None:
         return None
     if not (u.startswith("http://") or u.startswith("https://")):
         return None
+    started = time.monotonic()
+    host = ""
+    try:
+        host = urlparse(u).hostname or ""
+    except Exception:
+        host = ""
     try:
         with urllib.request.urlopen(u, timeout=30) as resp:
-            return resp.read()
-    except Exception:
+            status = getattr(resp, "status", None)
+            data = resp.read()
+            if data:
+                return data
+            logger.warning(
+                "tts.audio_url.empty",
+                extra={
+                    "event": "tts.audio_url.empty",
+                    "url_host": host,
+                    "status": int(status) if status is not None else None,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                },
+            )
+            return None
+    except HTTPError as e:
+        logger.warning(
+            "tts.audio_url.fetch_failed",
+            extra={
+                "event": "tts.audio_url.fetch_failed",
+                "url_host": host,
+                "status": int(getattr(e, "code", 0) or 0) or None,
+                "reason": (getattr(e, "reason", None) or e.__class__.__name__),
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+        return None
+    except URLError as e:
+        logger.warning(
+            "tts.audio_url.fetch_failed",
+            extra={
+                "event": "tts.audio_url.fetch_failed",
+                "url_host": host,
+                "reason": (str(getattr(e, "reason", "")) or e.__class__.__name__)[:256],
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+        return None
+    except Exception as e:
+        logger.warning(
+            "tts.audio_url.fetch_failed",
+            extra={
+                "event": "tts.audio_url.fetch_failed",
+                "url_host": host,
+                "reason": (str(e) or e.__class__.__name__)[:256],
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
         return None
 
 def _maybe_decode_base64(s: str) -> bytes | None:
@@ -281,6 +338,8 @@ def _as_jsonable(obj):
     if obj is None:
         return None
     if isinstance(obj, (str, int, float, bool)):
+        if isinstance(obj, str) and len(obj) > 512:
+            return obj[:512] + "...(truncated)"
         return obj
     if isinstance(obj, (bytes, bytearray)):
         return {"type": type(obj).__name__, "len": len(obj)}
@@ -462,63 +521,74 @@ class AudioGenerator:
                 result_map[asset_id] = final_path
                 continue
                 
-            # 1. Generate Baseline (Standard Rate, Emotional SSML)
-            # Use temp file
             temp_base = os.path.join(output_dir, f"{asset_id}_base.mp3")
-            
-            # Use standard emotional SSML for baseline
             baseline_ssml = _text_to_emotional_ssml(text)
-            
-            self._run_tts_v2(
-                SpeechSynthesizerV2, AudioFormat, 
-                model, voice, baseline_ssml, temp_base, 
-                enable_ssml=True, speech_rate=1.0
-            )
-            
-            audio_len = _get_audio_duration_sec(temp_base)
-            diff = video_duration - audio_len
-            
-            # Threshold 0.5s
-            if abs(diff) < 0.5:
-                # Accept baseline
-                os.replace(temp_base, final_path)
-                
-            elif diff > 0:
-                # Video > Audio: Insert Silence
-                # Use distributed SSML
-                dist_ssml = _construct_distributed_ssml(text, diff)
+
+            try:
                 self._run_tts_v2(
-                    SpeechSynthesizerV2, AudioFormat,
-                    model, voice, dist_ssml, final_path,
-                    enable_ssml=True, speech_rate=1.0
+                    SpeechSynthesizerV2,
+                    AudioFormat,
+                    model,
+                    voice,
+                    baseline_ssml,
+                    temp_base,
+                    enable_ssml=True,
+                    speech_rate=1.0,
                 )
+
+                audio_len = _get_audio_duration_sec(temp_base)
+                diff = video_duration - audio_len
+
+                if abs(diff) < 0.5:
+                    os.replace(temp_base, final_path)
+                elif diff > 0:
+                    dist_ssml = _construct_distributed_ssml(text, diff)
+                    self._run_tts_v2(
+                        SpeechSynthesizerV2,
+                        AudioFormat,
+                        model,
+                        voice,
+                        dist_ssml,
+                        final_path,
+                        enable_ssml=True,
+                        speech_rate=1.0,
+                    )
+                    if os.path.exists(temp_base):
+                        os.remove(temp_base)
+                else:
+                    safe_video_duration = max(video_duration, 0.1)
+                    ratio = audio_len / safe_video_duration
+                    target_rate = min(ratio, 1.25)
+                    self._run_tts_v2(
+                        SpeechSynthesizerV2,
+                        AudioFormat,
+                        model,
+                        voice,
+                        baseline_ssml,
+                        final_path,
+                        enable_ssml=True,
+                        speech_rate=target_rate,
+                    )
+                    if os.path.exists(temp_base):
+                        os.remove(temp_base)
+            except Exception:
                 if os.path.exists(temp_base):
-                    os.remove(temp_base)
-                    
-            else:
-                # Video < Audio: Speed Up
-                # ratio = audio / video
-                safe_video_duration = max(video_duration, 0.1)
-                ratio = audio_len / safe_video_duration
-                
-                # Limit max speed to 1.25
-                target_rate = min(ratio, 1.25)
-                
-                # If ratio is very small (e.g. 1.05), just speed up.
-                # If ratio is huge (e.g. 2.0), we cap at 1.25, and video will have to loop/slow-mo.
-                
-                # Generate with speed up
-                # Note: When speeding up, we should use raw text or minimal SSML to avoid double pauses?
-                # But we still want emotional prosody.
-                # Let's use the same emotional SSML but with higher global rate.
-                
-                self._run_tts_v2(
-                    SpeechSynthesizerV2, AudioFormat,
-                    model, voice, baseline_ssml, final_path,
-                    enable_ssml=True, speech_rate=target_rate
+                    try:
+                        os.remove(temp_base)
+                    except Exception:
+                        pass
+                logger.exception(
+                    "tts.segment.failed",
+                    extra={
+                        "event": "tts.segment.failed",
+                        "asset_id": asset_id,
+                        "tts_engine": Config.TTS_ENGINE,
+                        "tts_model": model,
+                        "voice": voice,
+                        "tts_enable_ssml": True,
+                    },
                 )
-                if os.path.exists(temp_base):
-                    os.remove(temp_base)
+                self._generate_silence(video_duration, final_path)
             
             result_map[asset_id] = final_path
             
@@ -533,32 +603,53 @@ class AudioGenerator:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _run_tts_v2(self, SpeechSynthesizerV2, AudioFormat, model, voice, payload, output_path, enable_ssml=False, speech_rate=1.0):
-        audio, request_id = _call_tts_v2_once(
-            SpeechSynthesizerV2=SpeechSynthesizerV2,
-            AudioFormat=AudioFormat,
-            model=model,
-            voice=voice,
-            payload=payload,
-            enable_ssml=enable_ssml,
-            speech_rate=speech_rate
+        last_audio = None
+        last_request_id = None
+        for attempt in range(1, 4):
+            audio, request_id = _call_tts_v2_once(
+                SpeechSynthesizerV2=SpeechSynthesizerV2,
+                AudioFormat=AudioFormat,
+                model=model,
+                voice=voice,
+                payload=payload,
+                enable_ssml=enable_ssml,
+                speech_rate=speech_rate,
+            )
+            last_audio = audio
+            last_request_id = request_id
+
+            status_code = getattr(audio, "status_code", None)
+            if status_code is None and isinstance(audio, dict):
+                status_code = audio.get("status_code")
+
+            if status_code is not None and int(status_code) != int(HTTPStatus.OK):
+                _raise_tts_failed("TTS failed", request_id=request_id, result=audio, model=model, voice=voice)
+
+            audio_bytes = _bytes_from_audio(audio)
+            if not audio_bytes and isinstance(audio, str):
+                audio_bytes = _maybe_decode_base64(audio)
+
+            if audio_bytes:
+                with open(output_path, "wb") as f:
+                    f.write(audio_bytes)
+                return
+
+            logger.warning(
+                "tts.empty_audio",
+                extra={
+                    "event": "tts.empty_audio",
+                    "attempt": int(attempt),
+                    "tts_engine": Config.TTS_ENGINE,
+                    "tts_model": model,
+                    "voice": voice,
+                    "tts_enable_ssml": bool(enable_ssml),
+                },
+            )
+        raise Exception(
+            "TTS returned empty audio: "
+            f"request_id={last_request_id}; "
+            f"result={json.dumps(_as_jsonable(last_audio), ensure_ascii=False)}"
         )
-        
-        status_code = getattr(audio, "status_code", None)
-        if status_code is None and isinstance(audio, dict):
-            status_code = audio.get("status_code")
-            
-        if status_code is not None and int(status_code) != int(HTTPStatus.OK):
-            _raise_tts_failed("TTS failed", request_id=request_id, result=audio, model=model, voice=voice)
-            
-        audio_bytes = _bytes_from_audio(audio)
-        if not audio_bytes and isinstance(audio, str):
-            audio_bytes = _maybe_decode_base64(audio)
-            
-        if audio_bytes:
-            with open(output_path, "wb") as f:
-                f.write(audio_bytes)
-        else:
-            raise Exception(f"TTS returned empty audio: request_id={request_id}")
 
     def _generate_internal(self, text, output_path):
         # Legacy support logic...

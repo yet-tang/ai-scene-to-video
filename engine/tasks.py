@@ -1070,14 +1070,17 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
 
     except Exception as e:
         if isinstance(e, Retry): raise
-        headers = getattr(self.request, "headers", {}) or {}
-        _set_project_failed(
-            project_id,
-            task_name="render_pipeline_task",
-            step="render_pipeline",
-            task_id=getattr(self.request, "id", None),
-            request_id=headers.get("request_id"),
-            exc=e,
-        )
         retries = int(getattr(self.request, "retries", 0) or 0)
+        max_retries = int(getattr(self, "max_retries", 0) or 0)
+        if retries >= max_retries:
+            headers = getattr(self.request, "headers", {}) or {}
+            _set_project_failed(
+                project_id,
+                task_name="render_pipeline_task",
+                step="render_pipeline",
+                task_id=getattr(self.request, "id", None),
+                request_id=headers.get("request_id"),
+                exc=e,
+            )
+            raise
         raise _retry_with_headers(self, exc=e, countdown=2 ** retries)

@@ -93,18 +93,20 @@ celery_app.conf.update(
 )
 
 @signals.task_prerun.connect
-def on_task_prerun(task_id, task, *args, **kwargs):
-    headers = getattr(task.request, "headers", None) or {}
-    if not headers and hasattr(task.request, "get"):
+def on_task_prerun(sender=None, task_id=None, task=None, args=None, kwargs=None, **extras):
+    t = task or sender
+    req = getattr(t, "request", None)
+    headers = getattr(req, "headers", None) or {}
+    if not headers and hasattr(req, "get"):
         try:
-            headers = task.request.get("headers") or {}
+            headers = req.get("headers") or {}
         except Exception:
             headers = {}
     request_id = headers.get("request_id") or "-"
     user_id = headers.get("user_id") or "-"
     request_id_var.set(request_id)
     user_id_var.set(user_id)
-    task_id_var.set(task_id or getattr(task.request, "id", "-") or "-")
+    task_id_var.set(task_id or getattr(req, "id", "-") or "-")
 
 @signals.after_setup_logger.connect
 def setup_loggers(logger, *args, **kwargs):

@@ -159,7 +159,7 @@ class PojoCoverageTest {
         assertThat(listItem.equals("x")).isFalse();
         assertThat(listItem.hashCode()).isNotZero();
 
-        ProjectListItemResponse listItem2 = new ProjectListItemResponse(projectId, "p", ProjectStatus.DRAFT, houseInfo, now);
+        ProjectListItemResponse listItem2 = new ProjectListItemResponse(projectId, "p", ProjectStatus.DRAFT, houseInfo, now, null, null, null);
         assertThat(listItem2.equals(listItem)).isTrue();
 
         Project project = Project.builder()

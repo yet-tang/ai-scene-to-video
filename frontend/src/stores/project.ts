@@ -35,6 +35,11 @@ export const useProjectStore = defineStore('project', () => {
     audioUrl: string
     finalVideoUrl: string
     status: string
+    errorLog: string
+    errorTaskId: string
+    errorRequestId: string
+    errorStep: string
+    errorAt: string
   }>({
     id: '',
     title: '',
@@ -50,7 +55,12 @@ export const useProjectStore = defineStore('project', () => {
     script: '',
     audioUrl: '',
     finalVideoUrl: '',
-    status: 'DRAFT'
+    status: 'DRAFT',
+    errorLog: '',
+    errorTaskId: '',
+    errorRequestId: '',
+    errorStep: '',
+    errorAt: ''
   })
 
   async function fetchProject(id: string) {
@@ -63,6 +73,11 @@ export const useProjectStore = defineStore('project', () => {
       currentProject.value.script = data.scriptContent
       currentProject.value.audioUrl = data.audioUrl
       currentProject.value.finalVideoUrl = data.finalVideoUrl
+      currentProject.value.errorLog = data.errorLog || ''
+      currentProject.value.errorTaskId = data.errorTaskId || ''
+      currentProject.value.errorRequestId = data.errorRequestId || ''
+      currentProject.value.errorStep = data.errorStep || ''
+      currentProject.value.errorAt = data.errorAt || ''
       
       // Parse houseInfo (JSON)
       if (data.houseInfo) {
@@ -135,6 +150,11 @@ export const useProjectStore = defineStore('project', () => {
     currentProject.value.id = id
     currentProject.value.title = 'Mock 项目 - 阳光花园 2室1厅'
     currentProject.value.status = status
+    currentProject.value.errorLog = ''
+    currentProject.value.errorTaskId = ''
+    currentProject.value.errorRequestId = ''
+    currentProject.value.errorStep = ''
+    currentProject.value.errorAt = ''
     currentProject.value.script = '欢迎来到阳光花园，小区环境优美，配套成熟。客厅通透明亮，卧室安静舒适。'
     currentProject.value.info = {
       communityName: '阳光花园',

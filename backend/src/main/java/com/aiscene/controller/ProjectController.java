@@ -41,6 +41,9 @@ public class ProjectController {
                 .status(p.getStatus())
                 .houseInfo(p.getHouseInfo())
                 .createdAt(p.getCreatedAt())
+                .errorRequestId(p.getErrorRequestId())
+                .errorStep(p.getErrorStep())
+                .errorAt(p.getErrorAt())
                 .build());
         return ResponseEntity.ok(body);
     }

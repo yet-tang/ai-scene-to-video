@@ -36,6 +36,19 @@
         </div>
       </van-cell-group>
 
+      <van-cell-group
+        v-if="project.errorRequestId || project.errorStep || project.errorAt || project.errorLog"
+        title="错误信息"
+        inset
+      >
+        <van-cell v-if="project.errorStep" title="步骤" :value="project.errorStep" />
+        <van-cell v-if="project.errorRequestId" title="Trace ID" :value="project.errorRequestId" />
+        <van-cell v-if="project.errorAt" title="时间" :value="formatDate(project.errorAt)" />
+        <div v-if="project.errorLog" class="script-content">
+          {{ project.errorLog }}
+        </div>
+      </van-cell-group>
+
       <!-- Actions -->
       <div class="action-buttons">
         <van-button 
@@ -123,6 +136,11 @@ const canRetry = computed(() => {
 const isCompleted = computed(() => {
     return project.value.status === 'COMPLETED'
 })
+
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return ''
+  return new Date(dateStr).toLocaleString()
+}
 
 onMounted(async () => {
   if (!projectId) {
