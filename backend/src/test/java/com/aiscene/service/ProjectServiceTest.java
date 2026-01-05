@@ -1,7 +1,9 @@
 package com.aiscene.service;
 
+import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.CreateProjectRequest;
 import com.aiscene.dto.TimelineResponse;
+import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
@@ -14,6 +16,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -164,9 +168,9 @@ class ProjectServiceTest {
     @Test
     void renderVideo_submitsRenderPipelineTask() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).scriptContent("content").build();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("content").build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
-        when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
 
         Asset a1 = Asset.builder().id(UUID.randomUUID()).ossUrl("u1").duration(1.0).build();
         Asset a2 = Asset.builder().id(UUID.randomUUID()).ossUrl("u2").duration(2.0).build();
@@ -175,10 +179,7 @@ class ProjectServiceTest {
         projectService.renderVideo(projectId);
 
         verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("content"), any(List.class));
-
-        ArgumentCaptor<Project> projectCaptor = ArgumentCaptor.forClass(Project.class);
-        verify(projectRepository).save(projectCaptor.capture());
-        assertThat(projectCaptor.getValue().getStatus()).isEqualTo(ProjectStatus.AUDIO_GENERATING);
+        verify(projectRepository).updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING));
     }
 
     @Test
@@ -235,5 +236,243 @@ class ProjectServiceTest {
         assertThatThrownBy(() -> projectService.getProject(projectId))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Project not found");
+    }
+
+    @Test
+    void confirmAsset_updatesStatusAndSubmitsAnalysisTaskWhenDraft() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        AssetConfirmRequest request = new AssetConfirmRequest();
+        request.setObjectKey("k");
+        when(storageService.getPublicUrl("k")).thenReturn("pub");
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
+            Asset a = invocation.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+
+        Asset saved = projectService.confirmAsset(projectId, request);
+
+        assertThat(saved.getOssUrl()).isEqualTo("pub");
+        assertThat(saved.getDuration()).isEqualTo(0.0);
+        assertThat(saved.getSortOrder()).isEqualTo(0);
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
+        verify(projectRepository, times(2)).save(project);
+        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "pub");
+    }
+
+    @Test
+    void confirmAsset_doesNotUpdateStatusWhenAlreadyAnalyzing() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.ANALYZING).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        AssetConfirmRequest request = new AssetConfirmRequest();
+        request.setObjectKey("k");
+        when(storageService.getPublicUrl("k")).thenReturn("pub");
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
+            Asset a = invocation.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+
+        Asset saved = projectService.confirmAsset(projectId, request);
+
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
+        verify(projectRepository, never()).save(project);
+        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "pub");
+    }
+
+    @Test
+    void updateAsset_updatesUserLabelSceneLabelAndSortOrder() {
+        UUID assetId = UUID.randomUUID();
+        Asset asset = Asset.builder().id(assetId).sceneLabel("厨房").sortOrder(1).build();
+        when(assetRepository.findById(assetId)).thenReturn(Optional.of(asset));
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateAssetRequest req = UpdateAssetRequest.builder().userLabel("客厅").sortOrder(2).build();
+        Asset updated = projectService.updateAsset(assetId, req);
+
+        assertThat(updated.getUserLabel()).isEqualTo("客厅");
+        assertThat(updated.getSceneLabel()).isEqualTo("客厅");
+        assertThat(updated.getSortOrder()).isEqualTo(2);
+        verify(assetRepository).save(asset);
+    }
+
+    @Test
+    void updateScriptContent_throwsWhenCompleted() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.COMPLETED).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.updateScriptContent(projectId, "s"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("completed");
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    void updateScriptContent_throwsWhenProcessing() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.AUDIO_GENERATING).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.updateScriptContent(projectId, "s"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("processing");
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    void updateScriptContent_updatesStatusAndSaves() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        projectService.updateScriptContent(projectId, "s");
+
+        assertThat(project.getScriptContent()).isEqualTo("s");
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.SCRIPT_GENERATED);
+        verify(projectRepository).save(project);
+    }
+
+    @Test
+    void renderVideo_throwsWhenScriptEmpty() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(" ").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.renderVideo(projectId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("empty");
+        verify(projectRepository, never()).updateStatusIfIn(any(), any(), any());
+    }
+
+    @Test
+    void renderVideo_throwsWhenNoAssets() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("c").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> projectService.renderVideo(projectId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No assets");
+        verify(projectRepository, never()).updateStatusIfIn(any(), any(), any());
+    }
+
+    @Test
+    void renderVideo_throwsProcessingWhenStatusUpdateRejectedButAlreadyRendering() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.RENDERING).scriptContent("c").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
+                Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
+        ));
+        when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(0);
+
+        assertThatThrownBy(() -> projectService.renderVideo(projectId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("processing");
+    }
+
+    @Test
+    void renderVideo_throwsNotReadyWhenStatusUpdateRejected() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).scriptContent("c").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
+                Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
+        ));
+        when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(0);
+
+        assertThatThrownBy(() -> projectService.renderVideo(projectId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not ready");
+    }
+
+    @Test
+    void uploadAsset_fallsBackToS3UploadWhenLocalSaveFails() throws java.io.IOException {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        org.springframework.web.multipart.MultipartFile file = org.mockito.Mockito.mock(org.springframework.web.multipart.MultipartFile.class);
+        when(file.getOriginalFilename()).thenReturn("x.mp4");
+        when(storageService.uploadFile(file)).thenReturn("s3://u");
+        org.mockito.Mockito.doThrow(new java.io.IOException("x")).when(file).transferTo(any(java.io.File.class));
+
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
+            Asset a = invocation.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+
+        Asset saved = projectService.uploadAsset(projectId, file);
+
+        verify(storageService).uploadFile(file);
+        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "s3://u");
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
+    }
+
+    @Test
+    void uploadAssetLocal_usesConfiguredBaseUrlAndSortOrder() throws java.io.IOException {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
+                Asset.builder().id(UUID.randomUUID()).build(),
+                Asset.builder().id(UUID.randomUUID()).build()
+        ));
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
+            Asset a = invocation.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+
+        org.springframework.test.util.ReflectionTestUtils.setField(projectService, "localAssetBaseUrl", "http://x/public/");
+
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "x".getBytes());
+        Asset saved = projectService.uploadAssetLocal(projectId, file);
+
+        assertThat(saved.getSortOrder()).isEqualTo(2);
+        assertThat(saved.getOssUrl()).contains("http://x/public/");
+        assertThat(saved.getOssUrl()).endsWith(".txt");
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
+    }
+
+    @Test
+    void uploadAssetLocal_throwsWhenLocalSaveFails() throws java.io.IOException {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        org.springframework.web.multipart.MultipartFile file = org.mockito.Mockito.mock(org.springframework.web.multipart.MultipartFile.class);
+        when(file.getOriginalFilename()).thenReturn("x.mp4");
+        org.mockito.Mockito.doThrow(new java.io.IOException("x")).when(file).transferTo(any(java.io.File.class));
+
+        assertThatThrownBy(() -> projectService.uploadAssetLocal(projectId, file))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Failed to save file locally");
+    }
+
+    @Test
+    void listProjects_callsCorrectRepositoryMethod() {
+        Page<Project> page = org.mockito.Mockito.mock(Page.class);
+        when(projectRepository.findAll(any(Pageable.class))).thenReturn(page);
+        when(projectRepository.findAllByUserId(eq(1L), any(Pageable.class))).thenReturn(page);
+
+        Page<Project> r0 = projectService.listProjects(null, 2, 10);
+        Page<Project> r1 = projectService.listProjects(1L, 1, 10);
+
+        assertThat(r0).isSameAs(page);
+        assertThat(r1).isSameAs(page);
+        verify(projectRepository).findAll(any(Pageable.class));
+        verify(projectRepository).findAllByUserId(eq(1L), any(Pageable.class));
     }
 }

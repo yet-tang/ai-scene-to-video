@@ -15,8 +15,6 @@ client.interceptors.request.use(
     if (apiKey) {
       config.headers['Authorization'] = `ApiKey ${apiKey}`
     }
-    // TODO: Hardcoded user ID for now, should be dynamic in production
-    config.headers['X-User-Id'] = '123'
     return config
   },
   (error) => {

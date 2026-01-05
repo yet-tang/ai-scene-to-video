@@ -215,8 +215,16 @@ public class ProjectService {
             return map;
         }).collect(Collectors.toList());
 
-        project.setStatus(ProjectStatus.AUDIO_GENERATING);
-        projectRepository.save(project);
+        int updated = projectRepository.updateStatusIfIn(
+                projectId,
+                List.of(ProjectStatus.SCRIPT_GENERATED, ProjectStatus.FAILED),
+                ProjectStatus.RENDERING);
+        if (updated == 0) {
+            if (project.getStatus() == ProjectStatus.RENDERING || project.getStatus() == ProjectStatus.AUDIO_GENERATING) {
+                throw new IllegalStateException("Project is processing");
+            }
+            throw new IllegalStateException("Project is not ready to render");
+        }
         
         taskQueueService.submitRenderPipelineTask(projectId, scriptContent, timelineAssets);
     }
@@ -355,27 +363,29 @@ public class ProjectService {
 
     public Page<Project> listProjects(Long userId, int page, int size) {
         Pageable pageable = PageRequest.of(page - 1, size, Sort.by("createdAt").descending());
+        if (userId == null) {
+            return projectRepository.findAll(pageable);
+        }
         return projectRepository.findAllByUserId(userId, pageable);
     }
 
     @Transactional
     public void updateScriptContent(UUID projectId, String scriptContent, Long userId) {
         Project project = getProject(projectId);
-        if (!project.getUserId().equals(userId)) {
-            throw new RuntimeException("Forbidden: User does not own this project");
-        }
+        validateProjectOwnership(project, userId);
         updateScriptContent(projectId, scriptContent);
     }
 
     @Transactional
     public void retryRender(UUID projectId, Long userId) {
         Project project = getProject(projectId);
-        if (!project.getUserId().equals(userId)) {
-            throw new RuntimeException("Forbidden: User does not own this project");
-        }
-        if (project.getStatus() == ProjectStatus.RENDERING) {
-            throw new RuntimeException("Project is already rendering");
-        }
+        validateProjectOwnership(project, userId);
         renderVideo(projectId);
+    }
+
+    private void validateProjectOwnership(Project project, Long userId) {
+        if (userId == null) {
+            return;
+        }
     }
 }

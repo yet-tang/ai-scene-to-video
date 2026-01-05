@@ -108,16 +108,16 @@ const project = computed(() => store.currentProject)
 const statusClass = computed(() => {
   const status = project.value.status
   if (status === 'COMPLETED') return 'bg-success'
-  if (['FAILED', 'RENDER_FAILED'].includes(status)) return 'bg-danger'
+  if (['FAILED'].includes(status)) return 'bg-danger'
   return 'bg-primary'
 })
 
 const canEditScript = computed(() => {
-  return ['SCRIPT_GENERATED', 'RENDER_FAILED', 'AUDIO_GENERATED'].includes(project.value.status)
+  return ['SCRIPT_GENERATED', 'FAILED'].includes(project.value.status)
 })
 
 const canRetry = computed(() => {
-  return ['FAILED', 'RENDER_FAILED'].includes(project.value.status)
+  return ['FAILED'].includes(project.value.status)
 })
 
 const isCompleted = computed(() => {

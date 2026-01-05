@@ -3,6 +3,7 @@ package com.aiscene.controller;
 import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.CreateProjectRequest;
 import com.aiscene.dto.PresignedUrlResponse;
+import com.aiscene.dto.ProjectListItemResponse;
 import com.aiscene.dto.TimelineResponse;
 import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
@@ -29,11 +30,19 @@ public class ProjectController {
     private final StorageService storageService;
 
     @GetMapping
-    public ResponseEntity<Page<Project>> listProjects(
-            @RequestHeader(value = "X-User-Id") Long userId,
+    public ResponseEntity<Page<ProjectListItemResponse>> listProjects(
+            @RequestHeader(value = "X-User-Id", required = false) Long userId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size) {
-        return ResponseEntity.ok(projectService.listProjects(userId, page, size));
+        Page<Project> projectPage = projectService.listProjects(userId, page, size);
+        Page<ProjectListItemResponse> body = projectPage.map(p -> ProjectListItemResponse.builder()
+                .id(p.getId())
+                .title(p.getTitle())
+                .status(p.getStatus())
+                .houseInfo(p.getHouseInfo())
+                .createdAt(p.getCreatedAt())
+                .build());
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping
@@ -120,11 +129,7 @@ public class ProjectController {
         if (scriptContent == null) {
             return ResponseEntity.badRequest().build();
         }
-        if (userId != null) {
-            projectService.updateScriptContent(id, scriptContent, userId);
-        } else {
-            projectService.updateScriptContent(id, scriptContent);
-        }
+        projectService.updateScriptContent(id, scriptContent, userId);
         return ResponseEntity.accepted().build();
     }
 
@@ -150,11 +155,7 @@ public class ProjectController {
     public ResponseEntity<Void> renderVideo(
             @PathVariable UUID id,
             @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        if (userId != null) {
-            projectService.retryRender(id, userId);
-        } else {
-            projectService.renderVideo(id);
-        }
+        projectService.retryRender(id, userId);
         return ResponseEntity.accepted().build();
     }
 }

@@ -63,9 +63,6 @@ const onLoad = async () => {
 
   try {
     const { data } = await projectApi.list({ page: page.value, size: pageSize })
-    // Assuming backend returns { content: [], totalElements: number, last: boolean } or similar page structure
-    // Adjust based on actual API response. 
-    // If API returns list directly:
     const items = Array.isArray(data) ? data : (data.content || [])
     
     if (items.length < pageSize) {
@@ -103,9 +100,7 @@ const getStatusType = (status: string) => {
     case 'COMPLETED':
       return 'success'
     case 'FAILED':
-    case 'RENDER_FAILED':
       return 'danger'
-    case 'PROCESSING':
     case 'RENDERING':
       return 'primary'
     default:

@@ -1,9 +1,13 @@
 package com.aiscene.controller;
 
 import com.aiscene.dto.CreateProjectRequest;
+import com.aiscene.dto.PresignedUrlResponse;
+import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.TimelineResponse;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
+import com.aiscene.entity.ProjectStatus;
+import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
 import org.junit.jupiter.api.Test;
@@ -16,6 +20,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 class ProjectControllerTest {
 
@@ -63,6 +69,82 @@ class ProjectControllerTest {
         when(projectService.uploadAsset(id, file)).thenReturn(asset);
 
         var resp = controller.uploadAsset(id, file);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isSameAs(asset);
+    }
+
+    @Test
+    void uploadAssetLocal_delegatesToService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        MockMultipartFile file = new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes());
+        Asset asset = Asset.builder().id(UUID.randomUUID()).build();
+        when(projectService.uploadAssetLocal(id, file)).thenReturn(asset);
+
+        var resp = controller.uploadAssetLocal(id, file);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isSameAs(asset);
+    }
+
+    @Test
+    void getPresignedUrl_delegatesToStorageService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        PresignedUrlResponse respBody = PresignedUrlResponse.builder()
+                .uploadUrl("u")
+                .publicUrl("p")
+                .objectKey("k")
+                .signedHeaders(java.util.Map.of())
+                .build();
+        when(storageService.generatePresignedUrl(any(String.class), eq("text/plain"))).thenReturn(respBody);
+
+        var resp = controller.getPresignedUrl(id, "a.txt", "text/plain");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isSameAs(respBody);
+        var keyCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(storageService).generatePresignedUrl(keyCaptor.capture(), eq("text/plain"));
+        assertThat(keyCaptor.getValue()).contains("-a.txt");
+    }
+
+    @Test
+    void confirmAsset_delegatesToService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        AssetConfirmRequest req = new AssetConfirmRequest();
+        Asset asset = Asset.builder().id(UUID.randomUUID()).build();
+        when(projectService.confirmAsset(id, req)).thenReturn(asset);
+
+        var resp = controller.confirmAsset(id, req);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isSameAs(asset);
+    }
+
+    @Test
+    void updateAsset_delegatesToService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID projectId = UUID.randomUUID();
+        UUID assetId = UUID.randomUUID();
+        UpdateAssetRequest req = new UpdateAssetRequest();
+        Asset asset = Asset.builder().id(assetId).build();
+        when(projectService.updateAsset(assetId, req)).thenReturn(asset);
+
+        var resp = controller.updateAsset(projectId, assetId, req);
 
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).isSameAs(asset);
@@ -131,6 +213,50 @@ class ProjectControllerTest {
     }
 
     @Test
+    void getScript_returnsFields() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        Project project = Project.builder().id(id).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("s").build();
+        when(projectService.getProject(id)).thenReturn(project);
+
+        var resp = controller.getScript(id);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().get("projectId")).isEqualTo(id.toString());
+        assertThat(resp.getBody().get("status")).isEqualTo("SCRIPT_GENERATED");
+        assertThat(resp.getBody().get("scriptContent")).isEqualTo("s");
+    }
+
+    @Test
+    void updateScript_delegatesToService() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        var resp = controller.updateScript(id, "s", null);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(202);
+        verify(projectService).updateScriptContent(id, "s", null);
+    }
+
+    @Test
+    void updateScript_returnsBadRequestWhenNullBody() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        UUID id = UUID.randomUUID();
+        var resp = controller.updateScript(id, null, null);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
     void renderVideo_returnsAccepted() {
         ProjectService projectService = Mockito.mock(ProjectService.class);
         StorageService storageService = Mockito.mock(StorageService.class);
@@ -141,7 +267,7 @@ class ProjectControllerTest {
         var resp = controller.renderVideo(id, null);
 
         assertThat(resp.getStatusCode().value()).isEqualTo(202);
-        verify(projectService).renderVideo(id);
+        verify(projectService).retryRender(id, null);
     }
 
     @Test
@@ -151,12 +277,30 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
         
         Long userId = 123L;
-        org.springframework.data.domain.Page<Project> page = org.springframework.data.domain.Page.empty();
+        Project p = Project.builder().id(UUID.randomUUID()).title("t").build();
+        org.springframework.data.domain.Page<Project> page = new org.springframework.data.domain.PageImpl<>(List.of(p));
         when(projectService.listProjects(userId, 1, 10)).thenReturn(page);
         
         var resp = controller.listProjects(userId, 1, 10);
         
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
-        assertThat(resp.getBody()).isSameAs(page);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().getContent()).hasSize(1);
+        assertThat(resp.getBody().getContent().get(0).getId()).isEqualTo(p.getId());
+        assertThat(resp.getBody().getContent().get(0).getTitle()).isEqualTo("t");
+    }
+
+    @Test
+    void listProjects_allowsNullUserId() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        org.springframework.data.domain.Page<Project> page = org.springframework.data.domain.Page.empty();
+        when(projectService.listProjects(null, 1, 10)).thenReturn(page);
+
+        var resp = controller.listProjects(null, 1, 10);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
     }
 }

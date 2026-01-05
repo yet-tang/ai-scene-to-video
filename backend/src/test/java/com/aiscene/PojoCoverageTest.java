@@ -1,16 +1,22 @@
 package com.aiscene;
 
 import com.aiscene.dto.AnalyzeTaskDto;
+import com.aiscene.dto.AssetConfirmRequest;
 import com.aiscene.dto.CreateProjectRequest;
+import com.aiscene.dto.PresignedUrlResponse;
+import com.aiscene.dto.ProjectListItemResponse;
 import com.aiscene.dto.TimelineResponse;
+import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
 import com.aiscene.entity.RenderJob;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +27,72 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PojoCoverageTest {
 
     @Test
-    void lombokDataAndBuilders_areCovered() {
+    void lombokDataAndBuilders_areCovered() throws Exception {
+        AssetConfirmRequest assetConfirm0 = new AssetConfirmRequest();
+        assertThat(assetConfirm0.getObjectKey()).isNull();
+        assertThat(assetConfirm0.toString()).contains("AssetConfirmRequest");
+
+        AssetConfirmRequest assetConfirm = new AssetConfirmRequest();
+        assetConfirm.setObjectKey("k");
+        assetConfirm.setFilename("f");
+        assetConfirm.setContentType("video/mp4");
+        assetConfirm.setSize(1L);
+        assertThat(assetConfirm.getObjectKey()).isEqualTo("k");
+        assertThat(assetConfirm.getFilename()).isEqualTo("f");
+        assertThat(assetConfirm.getContentType()).isEqualTo("video/mp4");
+        assertThat(assetConfirm.getSize()).isEqualTo(1L);
+        assertThat(assetConfirm.equals(assetConfirm)).isTrue();
+        assertThat(assetConfirm.equals(null)).isFalse();
+        assertThat(assetConfirm.equals("x")).isFalse();
+        assertThat(assetConfirm.equals(assetConfirm0)).isFalse();
+        AssetConfirmRequest assetConfirm2 = new AssetConfirmRequest();
+        assetConfirm2.setObjectKey("k");
+        assetConfirm2.setFilename("f");
+        assetConfirm2.setContentType("video/mp4");
+        assetConfirm2.setSize(1L);
+        assertThat(assetConfirm.equals(assetConfirm2)).isTrue();
+        assertThat(assetConfirm.hashCode()).isNotZero();
+
+        PresignedUrlResponse presigned = PresignedUrlResponse.builder()
+                .uploadUrl("u")
+                .publicUrl("p")
+                .objectKey("k")
+                .signedHeaders(Map.of("h", "v"))
+                .build();
+        assertThat(presigned.getUploadUrl()).isEqualTo("u");
+        assertThat(presigned.getPublicUrl()).isEqualTo("p");
+        assertThat(presigned.getObjectKey()).isEqualTo("k");
+        assertThat(presigned.getSignedHeaders()).containsEntry("h", "v");
+        assertThat(presigned.toString()).contains("uploadUrl");
+        assertThat(presigned.equals(null)).isFalse();
+        assertThat(presigned.equals("x")).isFalse();
+        assertThat(presigned.equals(PresignedUrlResponse.builder().uploadUrl("u").publicUrl("p").objectKey("k").signedHeaders(Map.of("h", "v")).build())).isTrue();
+        assertThat(presigned.equals(PresignedUrlResponse.builder().uploadUrl("u").publicUrl("p").objectKey("x").signedHeaders(Map.of("h", "v")).build())).isFalse();
+        assertThat(presigned.hashCode()).isNotZero();
+
+        var presignedCtor = PresignedUrlResponse.class.getDeclaredConstructor(String.class, String.class, String.class, Map.class);
+        presignedCtor.setAccessible(true);
+        PresignedUrlResponse presigned2 = (PresignedUrlResponse) presignedCtor.newInstance("u", "p", "k", Map.of("h", "v"));
+        assertThat(presigned2.getUploadUrl()).isEqualTo("u");
+        presigned2.setPublicUrl("p2");
+        assertThat(presigned2.getPublicUrl()).isEqualTo("p2");
+
+        UpdateAssetRequest updateAsset0 = new UpdateAssetRequest();
+        assertThat(updateAsset0.getUserLabel()).isNull();
+        assertThat(updateAsset0.getSortOrder()).isNull();
+        assertThat(updateAsset0.toString()).contains("UpdateAssetRequest");
+
+        UpdateAssetRequest updateAsset = UpdateAssetRequest.builder().userLabel("x").sortOrder(1).build();
+        assertThat(updateAsset.getUserLabel()).isEqualTo("x");
+        assertThat(updateAsset.getSortOrder()).isEqualTo(1);
+        assertThat(updateAsset.equals(updateAsset0)).isFalse();
+        assertThat(updateAsset.equals(null)).isFalse();
+        assertThat(updateAsset.equals("x")).isFalse();
+        assertThat(updateAsset.hashCode()).isNotZero();
+
+        UpdateAssetRequest updateAsset2 = new UpdateAssetRequest("x", 1);
+        assertThat(updateAsset2.equals(updateAsset)).isTrue();
+
         CreateProjectRequest req0 = new CreateProjectRequest();
         assertThat(req0.getUserId()).isNull();
         assertThat(req0.getTitle()).isNull();
@@ -66,6 +137,30 @@ class PojoCoverageTest {
         UUID projectId = UUID.randomUUID();
         var houseInfo = new ObjectMapper().createObjectNode().put("room", 2);
         LocalDateTime now = LocalDateTime.now();
+
+        ProjectListItemResponse listItem0 = new ProjectListItemResponse();
+        assertThat(listItem0.getId()).isNull();
+        assertThat(listItem0.toString()).contains("ProjectListItemResponse");
+
+        ProjectListItemResponse listItem = ProjectListItemResponse.builder()
+                .id(projectId)
+                .title("p")
+                .status(ProjectStatus.DRAFT)
+                .houseInfo(houseInfo)
+                .createdAt(now)
+                .build();
+        assertThat(listItem.getId()).isEqualTo(projectId);
+        assertThat(listItem.getTitle()).isEqualTo("p");
+        assertThat(listItem.getStatus()).isEqualTo(ProjectStatus.DRAFT);
+        assertThat(listItem.getHouseInfo()).isEqualTo(houseInfo);
+        assertThat(listItem.getCreatedAt()).isEqualTo(now);
+        assertThat(listItem.equals(listItem0)).isFalse();
+        assertThat(listItem.equals(null)).isFalse();
+        assertThat(listItem.equals("x")).isFalse();
+        assertThat(listItem.hashCode()).isNotZero();
+
+        ProjectListItemResponse listItem2 = new ProjectListItemResponse(projectId, "p", ProjectStatus.DRAFT, houseInfo, now);
+        assertThat(listItem2.equals(listItem)).isTrue();
 
         Project project = Project.builder()
                 .id(projectId)
