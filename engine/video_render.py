@@ -163,13 +163,17 @@ class VideoRenderer:
             clip = VideoFileClip(path)
             if not getattr(clip, "duration", None) or clip.duration <= 0:
                 raise OSError("video duration is 0")
+            # Validate start
             _ = clip.get_frame(0)
-            t0 = 0.0
+            
+            # Validate end (to ensure time_mirror won't crash)
             try:
-                t0 = min(0.1, max(0.0, float(clip.duration) - 0.001))
+                t_end = max(0.0, float(clip.duration) - 0.1)
+                if t_end > 0:
+                    _ = clip.get_frame(t_end)
             except Exception:
-                t0 = 0.0
-            _ = clip.get_frame(t0)
+                raise OSError(f"Cannot read frame at end of video ({getattr(clip, 'duration', 'unknown')})")
+            
             return clip
         except Exception:
             if clip is not None:
@@ -275,6 +279,14 @@ class VideoRenderer:
                     else:
                         # Video is shorter -> Boomerang Extend
                         # Create a boomerang effect: Forward -> Backward -> Forward ...
+                        
+                        # Fix: trim a bit from the end to avoid EOF errors during time_mirror (reverse)
+                        # Reading exactly at duration often fails in FFMPEG
+                        safe_dur = max(0.1, clip.duration - 0.1)
+                        if safe_dur < clip.duration:
+                            clip = clip.subclip(0, safe_dur)
+                            video_dur = clip.duration
+
                         extended_clips = [clip]
                         current_len = video_dur
                         direction = -1 # Next is backward
