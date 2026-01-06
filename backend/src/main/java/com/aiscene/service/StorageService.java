@@ -33,6 +33,12 @@ public class StorageService {
     @Value("${s3.storage.public-url}")
     private String publicUrlBase;
 
+    public String getBucketName() {
+        return bucketName;
+    }
+
+    public record UploadedObject(String objectKey, String publicUrl) {}
+
     public PresignedUrlResponse generatePresignedUrl(String objectKey, String contentType) {
         try {
             PutObjectRequest objectRequest = PutObjectRequest.builder()
@@ -100,21 +106,32 @@ public class StorageService {
             // Note: The bucket must be created beforehand.
             // We skip bucket creation logic here to keep permissions simple.
 
-            String fileName = UUID.randomUUID() + "-" + file.getOriginalFilename();
+            UploadedObject uploaded = uploadFileAndReturnObject(file);
+            return uploaded.publicUrl();
+
+        } catch (Exception e) {
+            log.error("Error uploading file to S3 Storage", e);
+            throw new RuntimeException("Failed to upload file", e);
+        }
+    }
+
+    public UploadedObject uploadFileAndReturnObject(MultipartFile file) {
+        try {
+            String objectKey = UUID.randomUUID() + "-" + file.getOriginalFilename();
             InputStream inputStream = file.getInputStream();
 
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                     .bucket(bucketName)
-                    .key(fileName)
+                    .key(objectKey)
                     .contentType(file.getContentType())
                     .build();
 
-            s3Client.putObject(putObjectRequest, 
-                    RequestBody.fromInputStream(inputStream, file.getSize()));
+            s3Client.putObject(
+                    putObjectRequest,
+                    RequestBody.fromInputStream(inputStream, file.getSize())
+            );
 
-            // Return the Public URL
-            return getPublicUrl(fileName);
-
+            return new UploadedObject(objectKey, getPublicUrl(objectKey));
         } catch (Exception e) {
             log.error("Error uploading file to S3 Storage", e);
             throw new RuntimeException("Failed to upload file", e);

@@ -178,6 +178,32 @@ def _download_to_temp(video_url: str) -> str:
     )
     return temp_video.name
 
+def _fetch_asset_source(asset_id: str) -> dict | None:
+    conn = psycopg2.connect(Config.DB_DSN)
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT oss_url, storage_type, storage_bucket, storage_key, local_path
+                    FROM assets
+                    WHERE id = %s
+                    """,
+                    (asset_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "oss_url": row[0],
+                    "storage_type": row[1],
+                    "storage_bucket": row[2],
+                    "storage_key": row[3],
+                    "local_path": row[4],
+                }
+    finally:
+        conn.close()
+
 def _get_video_duration_sec(video_url: str) -> float:
     import cv2
     cap = cv2.VideoCapture(video_url)
@@ -613,21 +639,23 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
     # (Original content of analyze_video_task)
     started = time.monotonic()
     attempt = int(getattr(self.request, "retries", 0) or 0) + 1
+    asset_source = _fetch_asset_source(asset_id) or {"oss_url": video_url}
+
     _log_info(
         "task.start",
         task_name="analyze_video_task",
         project_id=project_id,
         asset_id=asset_id,
-        url_host=_url_host(video_url),
+        url_host=_url_host(asset_source.get("oss_url") or video_url),
         attempt=attempt,
         retries=int(getattr(self.request, "retries", 0) or 0),
     )
     
     try:
         _advance_project_status(project_id)
-        _log_info("step.start", step="download", project_id=project_id, asset_id=asset_id, url_host=_url_host(video_url))
-        local_video = _download_to_temp(video_url)
-        cleanup_local_video = not local_video.startswith("/tmp/ai-video-uploads/")
+        _log_info("step.start", step="download", project_id=project_id, asset_id=asset_id, url_host=_url_host(asset_source.get("oss_url") or video_url))
+        local_video = video_render._download_temp(asset_source)
+        cleanup_local_video = (asset_source.get("storage_type") or "").upper() != "LOCAL_FILE"
         duration_sec = _get_video_duration_sec(local_video)
         _log_info(
             "step.finish",
@@ -645,11 +673,17 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
         if (Config.SMART_SPLIT_ENABLED and duration_sec >= Config.SMART_SPLIT_MIN_DURATION_SEC):
             # ... Split Logic ...
             
-            if Config.SMART_SPLIT_STRATEGY == "qwen_video" and _is_http_url(video_url):
-                 segments_text = detector.analyze_video_segments(video_url)
+            if Config.SMART_SPLIT_STRATEGY == "qwen_video" and _is_http_url(asset_source.get("oss_url") or ""):
+                 segments_text = detector.analyze_video_segments(asset_source.get("oss_url"))
                  segments_raw = _parse_model_json(segments_text)
                  segments = _coerce_segments(segments_raw)
-                 _process_split_logic(project_id, asset_id, video_url, segments)
+                 _process_split_logic(
+                     project_id,
+                     asset_id,
+                     asset_source.get("oss_url") or video_url,
+                     segments,
+                     local_video_path=local_video,
+                 )
                  _advance_project_status(project_id)
                  if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
                  return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
@@ -686,7 +720,13 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                      for sf in shot_frames:
                          if os.path.exists(sf["image"]): os.remove(sf["image"])
 
-                     _process_split_logic(project_id, asset_id, video_url, segments, local_video_path=local_video)
+                     _process_split_logic(
+                         project_id,
+                         asset_id,
+                         asset_source.get("oss_url") or video_url,
+                         segments,
+                         local_video_path=local_video,
+                     )
                      _advance_project_status(project_id)
                      if cleanup_local_video and os.path.exists(local_video): os.remove(local_video)
                      return {"project_id": project_id, "status": "split_completed", "segments": len(segments)}
@@ -777,21 +817,25 @@ def _parse_and_align_segments(project_id: str, script_content: str):
         with conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT id, oss_url, duration, scene_label 
+                    SELECT id, oss_url, storage_type, storage_bucket, storage_key, local_path, duration, scene_label 
                     FROM assets 
                     WHERE project_id = %s AND is_deleted = FALSE 
                     ORDER BY sort_order ASC
                 """, (project_id,))
                 rows = cursor.fetchall()
                 for r in rows:
-                    duration_val = float(r[2] or 0.0)
+                    duration_val = float(r[6] or 0.0)
                     if duration_val <= 0:
                         duration_val = 5.0
                     timeline_assets.append({
                         "id": str(r[0]),
                         "oss_url": r[1],
+                        "storage_type": r[2],
+                        "storage_bucket": r[3],
+                        "storage_key": r[4],
+                        "local_path": r[5],
                         "duration": duration_val,
-                        "scene_label": r[3]
+                        "scene_label": r[7]
                     })
     finally:
         conn.close()

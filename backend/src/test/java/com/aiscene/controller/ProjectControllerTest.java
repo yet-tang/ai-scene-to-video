@@ -13,6 +13,7 @@ import com.aiscene.service.StorageService;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.UUID;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 
@@ -302,5 +304,30 @@ class ProjectControllerTest {
         var resp = controller.listProjects(null, 1, 10);
 
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
+    }
+
+    @Test
+    void resetAllData_returns404WhenDisabled() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+
+        var resp = controller.resetAllData();
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(404);
+        verify(projectService, never()).resetAllData();
+    }
+
+    @Test
+    void resetAllData_returnsNoContentWhenEnabled() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+        ReflectionTestUtils.setField(controller, "devResetEnabled", true);
+
+        var resp = controller.resetAllData();
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(204);
+        verify(projectService).resetAllData();
     }
 }

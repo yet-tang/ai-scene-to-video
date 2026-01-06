@@ -27,6 +27,19 @@ public class Asset {
     @Column(name = "oss_url")
     private String ossUrl;
 
+    @Column(name = "storage_type")
+    @Builder.Default
+    private String storageType = "S3";
+
+    @Column(name = "storage_bucket")
+    private String storageBucket;
+
+    @Column(name = "storage_key")
+    private String storageKey;
+
+    @Column(name = "local_path")
+    private String localPath;
+
     private Double duration;
 
     @Column(name = "scene_label")

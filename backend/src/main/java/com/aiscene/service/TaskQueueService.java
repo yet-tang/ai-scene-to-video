@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -25,24 +27,38 @@ public class TaskQueueService {
     private final ObjectMapper objectMapper;
 
     // Must match the queue name in Celery
-    private static final String QUEUE_NAME = "celery"; 
+    private static final String QUEUE_NAME = "ai-video:celery"; 
 
     public void submitAnalysisTask(UUID projectId, UUID assetId, String videoUrl) {
-        AnalyzeTaskDto taskDto = AnalyzeTaskDto.builder()
-                .project_id(projectId.toString())
-                .asset_id(assetId.toString())
-                .video_url(videoUrl)
-                .build();
+        Runnable submit = () -> {
+            AnalyzeTaskDto taskDto = AnalyzeTaskDto.builder()
+                    .project_id(projectId.toString())
+                    .asset_id(assetId.toString())
+                    .video_url(videoUrl)
+                    .build();
 
-        Map<String, Object> extraHeaders = new HashMap<>();
-        extraHeaders.put("project_id", taskDto.getProject_id());
-        extraHeaders.put("asset_id", taskDto.getAsset_id());
-        String taskId = sendCeleryTask(
-                "tasks.analyze_video_task",
-                new Object[]{taskDto.getProject_id(), taskDto.getAsset_id(), taskDto.getVideo_url()},
-                extraHeaders
-        );
-        log.info("Submitted analysis task task_id={} project_id={} asset_id={}", taskId, projectId, assetId);
+            Map<String, Object> extraHeaders = new HashMap<>();
+            extraHeaders.put("project_id", taskDto.getProject_id());
+            extraHeaders.put("asset_id", taskDto.getAsset_id());
+            String taskId = sendCeleryTask(
+                    "tasks.analyze_video_task",
+                    new Object[]{taskDto.getProject_id(), taskDto.getAsset_id(), taskDto.getVideo_url()},
+                    extraHeaders
+            );
+            log.info("Submitted analysis task task_id={} project_id={} asset_id={}", taskId, projectId, assetId);
+        };
+
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    submit.run();
+                }
+            });
+            return;
+        }
+
+        submit.run();
     }
 
     public String submitScriptGenerationTask(UUID projectId, Object houseInfo, java.util.List<Object> timelineData) {

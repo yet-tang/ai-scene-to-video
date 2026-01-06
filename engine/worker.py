@@ -1,5 +1,6 @@
 from celery import Celery, signals
 from config import Config
+from kombu import Queue
 import logging
 import contextvars
 import json
@@ -92,6 +93,9 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='Asia/Shanghai',
     enable_utc=True,
+    task_default_queue=Config.CELERY_QUEUE_NAME,
+    task_queues=(Queue(Config.CELERY_QUEUE_NAME),),
+    task_create_missing_queues=True,
 )
 
 @signals.task_prerun.connect

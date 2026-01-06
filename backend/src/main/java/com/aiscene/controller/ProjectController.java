@@ -12,6 +12,7 @@ import com.aiscene.entity.ProjectStatus;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -28,6 +29,9 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final StorageService storageService;
+
+    @Value("${app.dev-reset-enabled:false}")
+    private boolean devResetEnabled;
 
     @GetMapping
     public ResponseEntity<Page<ProjectListItemResponse>> listProjects(
@@ -160,5 +164,14 @@ public class ProjectController {
             @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         projectService.retryRender(id, userId);
         return ResponseEntity.accepted().build();
+    }
+
+    @PostMapping("/dev/reset")
+    public ResponseEntity<Void> resetAllData() {
+        if (!devResetEnabled) {
+            return ResponseEntity.notFound().build();
+        }
+        projectService.resetAllData();
+        return ResponseEntity.noContent().build();
     }
 }

@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -52,6 +53,9 @@ class ProjectServiceTest {
 
     @Mock
     private ObjectMapper objectMapper;
+
+    @Mock
+    private JdbcTemplate jdbcTemplate;
 
     @InjectMocks
     private ProjectService projectService;
@@ -188,12 +192,9 @@ class ProjectServiceTest {
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
-        // Mock local file transfer to avoid real file system access issues in test environment or assume success
-        // But since transferTo writes to disk, we might want to mock the file object itself more deeply or just verify flow.
-        // Actually, since we changed implementation to write to local disk first, we need to handle that.
-        // For unit test, we can't easily mock Paths.get or Files.createDirectories without PowerMock.
-        // But we can verify that taskQueueService receives a file:// url.
-        
+        when(storageService.uploadFileAndReturnObject(any())).thenReturn(new StorageService.UploadedObject("k1", "pub1"));
+        when(storageService.getBucketName()).thenReturn("b");
+
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
             Asset a = invocation.getArgument(0);
             a.setId(UUID.randomUUID());
@@ -209,8 +210,13 @@ class ProjectServiceTest {
         ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
         verify(taskQueueService).submitAnalysisTask(eq(projectId), eq(saved.getId()), urlCaptor.capture());
         String capturedUrl = urlCaptor.getValue();
-        assertThat(capturedUrl).startsWith("file:///");
-        assertThat(capturedUrl).endsWith(".txt");
+        assertThat(capturedUrl).isEqualTo("pub1");
+
+        ArgumentCaptor<Asset> assetCaptor = ArgumentCaptor.forClass(Asset.class);
+        verify(assetRepository).save(assetCaptor.capture());
+        assertThat(assetCaptor.getValue().getStorageType()).isEqualTo("S3");
+        assertThat(assetCaptor.getValue().getStorageBucket()).isEqualTo("b");
+        assertThat(assetCaptor.getValue().getStorageKey()).isEqualTo("k1");
     }
 
     @Test
@@ -219,6 +225,8 @@ class ProjectServiceTest {
         Project project = Project.builder().id(projectId).status(ProjectStatus.UPLOADING).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
+        when(storageService.uploadFileAndReturnObject(any())).thenReturn(new StorageService.UploadedObject("k1", "pub1"));
+        when(storageService.getBucketName()).thenReturn("b");
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> invocation.getArgument(0));
         var file = new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "x".getBytes());
 
@@ -247,6 +255,7 @@ class ProjectServiceTest {
         AssetConfirmRequest request = new AssetConfirmRequest();
         request.setObjectKey("k");
         when(storageService.getPublicUrl("k")).thenReturn("pub");
+        when(storageService.getBucketName()).thenReturn("b");
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
             Asset a = invocation.getArgument(0);
@@ -257,6 +266,9 @@ class ProjectServiceTest {
         Asset saved = projectService.confirmAsset(projectId, request);
 
         assertThat(saved.getOssUrl()).isEqualTo("pub");
+        assertThat(saved.getStorageType()).isEqualTo("S3");
+        assertThat(saved.getStorageBucket()).isEqualTo("b");
+        assertThat(saved.getStorageKey()).isEqualTo("k");
         assertThat(saved.getDuration()).isEqualTo(0.0);
         assertThat(saved.getSortOrder()).isEqualTo(0);
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
@@ -313,6 +325,12 @@ class ProjectServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("completed");
         verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    void resetAllData_truncatesTables() {
+        projectService.resetAllData();
+        verify(jdbcTemplate).execute("TRUNCATE TABLE render_jobs, assets, projects RESTART IDENTITY CASCADE");
     }
 
     @Test
@@ -397,15 +415,14 @@ class ProjectServiceTest {
     }
 
     @Test
-    void uploadAsset_fallsBackToS3UploadWhenLocalSaveFails() throws java.io.IOException {
+    void uploadAsset_usesStorageServiceAndWritesStorageFields() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
         org.springframework.web.multipart.MultipartFile file = org.mockito.Mockito.mock(org.springframework.web.multipart.MultipartFile.class);
-        when(file.getOriginalFilename()).thenReturn("x.mp4");
-        when(storageService.uploadFile(file)).thenReturn("s3://u");
-        org.mockito.Mockito.doThrow(new java.io.IOException("x")).when(file).transferTo(any(java.io.File.class));
+        when(storageService.getBucketName()).thenReturn("b1");
+        when(storageService.uploadFileAndReturnObject(file)).thenReturn(new StorageService.UploadedObject("k1", "https://pub/u1"));
 
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
             Asset a = invocation.getArgument(0);
@@ -415,13 +432,18 @@ class ProjectServiceTest {
 
         Asset saved = projectService.uploadAsset(projectId, file);
 
-        verify(storageService).uploadFile(file);
-        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "s3://u");
+        assertThat(saved.getOssUrl()).isEqualTo("https://pub/u1");
+        assertThat(saved.getStorageType()).isEqualTo("S3");
+        assertThat(saved.getStorageBucket()).isEqualTo("b1");
+        assertThat(saved.getStorageKey()).isEqualTo("k1");
+
+        verify(storageService).uploadFileAndReturnObject(file);
+        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "https://pub/u1");
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
     }
 
     @Test
-    void uploadAssetLocal_usesConfiguredBaseUrlAndSortOrder() throws java.io.IOException {
+    void uploadAssetLocal_usesStorageServiceAndSortOrder() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
@@ -429,36 +451,43 @@ class ProjectServiceTest {
                 Asset.builder().id(UUID.randomUUID()).build(),
                 Asset.builder().id(UUID.randomUUID()).build()
         ));
+        when(storageService.getBucketName()).thenReturn("b1");
+        when(storageService.uploadFileAndReturnObject(any())).thenReturn(new StorageService.UploadedObject("k1", "https://pub/u1"));
         when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
             Asset a = invocation.getArgument(0);
             a.setId(UUID.randomUUID());
             return a;
         });
 
-        org.springframework.test.util.ReflectionTestUtils.setField(projectService, "localAssetBaseUrl", "http://x/public/");
-
         var file = new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "x".getBytes());
         Asset saved = projectService.uploadAssetLocal(projectId, file);
 
         assertThat(saved.getSortOrder()).isEqualTo(2);
-        assertThat(saved.getOssUrl()).contains("http://x/public/");
-        assertThat(saved.getOssUrl()).endsWith(".txt");
+        assertThat(saved.getOssUrl()).isEqualTo("https://pub/u1");
+        assertThat(saved.getStorageType()).isEqualTo("S3");
+        assertThat(saved.getStorageBucket()).isEqualTo("b1");
+        assertThat(saved.getStorageKey()).isEqualTo("k1");
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.ANALYZING);
     }
 
     @Test
-    void uploadAssetLocal_throwsWhenLocalSaveFails() throws java.io.IOException {
+    void uploadAssetLocal_submitsAnalysisTask() throws java.io.IOException {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
+        when(storageService.uploadFileAndReturnObject(any())).thenReturn(new StorageService.UploadedObject("k1", "https://pub/u1"));
 
-        org.springframework.web.multipart.MultipartFile file = org.mockito.Mockito.mock(org.springframework.web.multipart.MultipartFile.class);
-        when(file.getOriginalFilename()).thenReturn("x.mp4");
-        org.mockito.Mockito.doThrow(new java.io.IOException("x")).when(file).transferTo(any(java.io.File.class));
+        when(assetRepository.save(any(Asset.class))).thenAnswer(invocation -> {
+            Asset a = invocation.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
 
-        assertThatThrownBy(() -> projectService.uploadAssetLocal(projectId, file))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("Failed to save file locally");
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "x.mp4", "video/mp4", "x".getBytes());
+        Asset saved = projectService.uploadAssetLocal(projectId, file);
+
+        verify(taskQueueService).submitAnalysisTask(projectId, saved.getId(), "https://pub/u1");
     }
 
     @Test

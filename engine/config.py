@@ -8,6 +8,8 @@ class Config:
     # Redis (Self-hosted)
     REDIS_URL = os.getenv("REDIS_URL")
 
+    CELERY_QUEUE_NAME = os.getenv("CELERY_QUEUE_NAME", "ai-video:celery")
+
     # DashScope (Aliyun Qwen-VL)
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
     QWEN_IMAGE_MODEL = os.getenv("QWEN_IMAGE_MODEL", "qwen-vl-plus")

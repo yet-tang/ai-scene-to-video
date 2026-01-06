@@ -16,6 +16,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,6 +39,7 @@ public class ProjectService {
     private final StorageService storageService;
     private final TaskQueueService taskQueueService;
     private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbcTemplate;
 
     @Value("${app.local-asset-base-url:http://ai-scene-backend:8090/public}")
     private String localAssetBaseUrl;
@@ -53,13 +55,16 @@ public class ProjectService {
             projectRepository.save(project);
         }
 
-        // Construct public URL
-        String ossUrl = storageService.getPublicUrl(request.getObjectKey());
+        String objectKey = request.getObjectKey();
+        String ossUrl = storageService.getPublicUrl(objectKey);
 
         int nextSortOrder = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).size();
         Asset asset = Asset.builder()
                 .project(project)
                 .ossUrl(ossUrl)
+                .storageType("S3")
+                .storageBucket(storageService.getBucketName())
+                .storageKey(objectKey)
                 // Duration will be extracted by Python worker later
                 .duration(0.0)
                 .sortOrder(nextSortOrder)
@@ -122,14 +127,6 @@ public class ProjectService {
 
         if (request.getUserLabel() != null) {
             asset.setUserLabel(request.getUserLabel());
-            // Also update sceneLabel if user explicitly changes it (frontend usually sends userLabel)
-            // Or we keep sceneLabel as AI result and use userLabel for display/generation priority.
-            // Logic: script generation uses scene_label in current code. 
-            // We should probably update sceneLabel too OR make script gen prefer userLabel.
-            // Let's look at `generateScript`... it puts `scene_label` into the map.
-            // To be safe for now, let's update sceneLabel too if userLabel is provided, 
-            // so existing script gen logic picks it up.
-            // Ideally we should refactor script gen to look at userLabel first.
             asset.setSceneLabel(request.getUserLabel());
         }
         
@@ -257,40 +254,17 @@ public class ProjectService {
             projectRepository.save(project);
         }
 
-        // Save file locally for local split optimization
-        String ossUrl;
-        try {
-            // Ensure temp directory exists
-            java.nio.file.Path tempDir = java.nio.file.Paths.get("/tmp/ai-video-uploads");
-            if (!java.nio.file.Files.exists(tempDir)) {
-                java.nio.file.Files.createDirectories(tempDir);
-            }
-            
-            // Save file to local temp
-            String originalFilename = file.getOriginalFilename();
-            String extension = "";
-            if (originalFilename != null && originalFilename.contains(".")) {
-                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-            }
-            String localFilename = UUID.randomUUID() + extension;
-            java.nio.file.Path localPath = tempDir.resolve(localFilename);
-            file.transferTo(localPath.toFile());
-            
-            // Use file:// protocol for Worker to recognize local path
-            ossUrl = "file://" + localPath.toAbsolutePath().toString();
-            
-        } catch (java.io.IOException e) {
-            // Fallback to S3 upload if local save fails
-            ossUrl = storageService.uploadFile(file);
-        }
+        StorageService.UploadedObject uploaded = storageService.uploadFileAndReturnObject(file);
 
+        int nextSortOrder = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).size();
         Asset asset = Asset.builder()
                 .project(project)
-                .ossUrl(ossUrl)
-                // Duration will be extracted by Python worker later, or we can use ffprobe here if installed.
-                // For MVP async flow, we leave it null or 0 for now.
-                .duration(0.0) 
-                .sortOrder(0) // Default order
+                .ossUrl(uploaded.publicUrl())
+                .storageType("S3")
+                .storageBucket(storageService.getBucketName())
+                .storageKey(uploaded.objectKey())
+                .duration(0.0)
+                .sortOrder(nextSortOrder)
                 .build();
 
         Asset savedAsset = assetRepository.save(asset);
@@ -315,36 +289,15 @@ public class ProjectService {
             projectRepository.save(project);
         }
 
-        String ossUrl;
-        try {
-            java.nio.file.Path tempDir = java.nio.file.Paths.get("/tmp/ai-video-uploads");
-            if (!java.nio.file.Files.exists(tempDir)) {
-                java.nio.file.Files.createDirectories(tempDir);
-            }
-
-            String originalFilename = file.getOriginalFilename();
-            String extension = "";
-            if (originalFilename != null && originalFilename.contains(".")) {
-                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
-            }
-            String localFilename = UUID.randomUUID() + extension;
-            java.nio.file.Path localPath = tempDir.resolve(localFilename);
-            file.transferTo(localPath.toFile());
-
-            String base = localAssetBaseUrl == null ? "" : localAssetBaseUrl.trim();
-            if (base.endsWith("/")) {
-                base = base.substring(0, base.length() - 1);
-            }
-            ossUrl = base + "/" + localFilename;
-
-        } catch (java.io.IOException e) {
-            throw new RuntimeException("Failed to save file locally", e);
-        }
+        StorageService.UploadedObject uploaded = storageService.uploadFileAndReturnObject(file);
 
         int nextSortOrder = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).size();
         Asset asset = Asset.builder()
                 .project(project)
-                .ossUrl(ossUrl)
+                .ossUrl(uploaded.publicUrl())
+                .storageType("S3")
+                .storageBucket(storageService.getBucketName())
+                .storageKey(uploaded.objectKey())
                 .duration(0.0)
                 .sortOrder(nextSortOrder)
                 .build();
@@ -383,9 +336,17 @@ public class ProjectService {
         renderVideo(projectId);
     }
 
+    @Transactional
+    public void resetAllData() {
+        jdbcTemplate.execute("TRUNCATE TABLE render_jobs, assets, projects RESTART IDENTITY CASCADE");
+    }
+
     private void validateProjectOwnership(Project project, Long userId) {
         if (userId == null) {
             return;
+        }
+        if (project.getUserId() == null || !userId.equals(project.getUserId())) {
+            throw new IllegalStateException("Forbidden");
         }
     }
 }
