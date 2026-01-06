@@ -235,12 +235,7 @@ def _split_text_by_limit(text: str, limit_chars: int) -> list[str]:
 
 def _ffmpeg_concat_mp3(parts: list[str], output_path: str):
     for p in parts:
-        if not _is_valid_mp3_file(p):
-            try:
-                size = os.path.getsize(p) if os.path.exists(p) else 0
-            except Exception:
-                size = -1
-            raise RuntimeError(f"invalid mp3 part: path={p}, size={size}")
+        _assert_valid_mp3_file(p)
 
     if len(parts) == 1:
         try:
@@ -322,6 +317,32 @@ def _get_audio_duration_sec(file_path: str) -> float:
     except Exception:
         return 0.0
 
+def _probe_audio_duration(file_path: str) -> tuple[bool, float, str]:
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            file_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            return False, 0.0, err
+        out = (result.stdout or "").strip()
+        if not out:
+            return False, 0.0, ""
+        try:
+            return True, float(out), ""
+        except Exception:
+            return False, 0.0, out
+    except Exception as e:
+        return False, 0.0, (str(e) or e.__class__.__name__)
+
 def _is_valid_mp3_file(file_path: str) -> bool:
     try:
         if not os.path.exists(file_path):
@@ -331,21 +352,25 @@ def _is_valid_mp3_file(file_path: str) -> bool:
     except Exception:
         return False
 
-    duration = _get_audio_duration_sec(file_path)
-    if duration > 0.01:
-        return True
-
-    try:
-        with open(file_path, "rb") as f:
-            head = f.read(4)
-        if head.startswith(b"ID3"):
-            return True
-        if len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
-            return True
-    except Exception:
+    ok, duration, _err = _probe_audio_duration(file_path)
+    if not ok:
         return False
+    return duration > 0.01
 
-    return False
+def _assert_valid_mp3_file(file_path: str):
+    try:
+        size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    except Exception:
+        size = -1
+    ok, duration, err = _probe_audio_duration(file_path)
+    if ok and duration > 0.01:
+        return
+    err_s = (err or "").strip()
+    if len(err_s) > 800:
+        err_s = err_s[:800] + "...(truncated)"
+    if err_s:
+        raise RuntimeError(f"invalid mp3 part: path={file_path}, size={size}, ffprobe={err_s}")
+    raise RuntimeError(f"invalid mp3 part: path={file_path}, size={size}")
 
 def _call_tts_v2_once(
     *,
