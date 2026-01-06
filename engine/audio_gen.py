@@ -39,6 +39,19 @@ def _format_tts_error(result) -> str:
 def _bytes_from_audio(audio):
     if audio is None:
         return None
+    if isinstance(audio, str):
+        s = audio.strip()
+        if not s:
+            return None
+        if s.startswith("http://") or s.startswith("https://"):
+            fetched = _download_audio_url(s)
+            if fetched:
+                return fetched
+            return None
+        decoded = _maybe_decode_base64(s)
+        if decoded:
+            return decoded
+        return None
     if isinstance(audio, (bytes, bytearray)):
         return bytes(audio)
     get_audio_data = getattr(audio, "get_audio_data", None)
@@ -547,6 +560,29 @@ def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
 
     return f"<speak>{escaped}</speak>"
 
+def _normalize_tts_model_and_voice(*, model: str | None, voice: str | None):
+    original_model = (model or "").strip()
+    original_voice = (voice or "").strip()
+    final_model = original_model or "cosyvoice-v3-flash"
+    final_voice = original_voice or "longanyang"
+
+    if "vc-realtime" in final_model and final_voice == "longanyang":
+        fallback_model = "cosyvoice-v3-flash"
+        logger.warning(
+            "tts.model.voice_mismatch",
+            extra={
+                "event": "tts.model.voice_mismatch",
+                "tts_engine": Config.TTS_ENGINE,
+                "tts_model": fallback_model,
+                "voice": final_voice,
+                "model": final_model,
+                "reason": "vc-realtime model requires cloned voice; fallback to cosyvoice-v3-flash",
+            },
+        )
+        final_model = fallback_model
+
+    return final_model, final_voice
+
 class AudioGenerator:
     def __init__(self):
         if not Config.DASHSCOPE_API_KEY:
@@ -586,8 +622,7 @@ class AudioGenerator:
         from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
         from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
         
-        model = Config.TTS_MODEL or "cosyvoice-v3-flash"
-        voice = Config.TTS_VOICE or "longanyang"
+        model, voice = _normalize_tts_model_and_voice(model=Config.TTS_MODEL, voice=Config.TTS_VOICE)
         
         for seg in segments:
             text = seg.get('text', '').strip()
@@ -608,17 +643,42 @@ class AudioGenerator:
             baseline_ssml = _text_to_emotional_ssml(text)
 
             try:
-                self._run_tts_v2(
-                    SpeechSynthesizerV2,
-                    AudioFormat,
-                    model,
-                    voice,
-                    baseline_ssml,
-                    temp_base,
-                    enable_ssml=True,
-                    speech_rate=1.0,
-                    asset_id=asset_id,
-                )
+                try:
+                    self._run_tts_v2(
+                        SpeechSynthesizerV2,
+                        AudioFormat,
+                        model,
+                        voice,
+                        baseline_ssml,
+                        temp_base,
+                        enable_ssml=True,
+                        speech_rate=1.0,
+                        asset_id=asset_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "tts.ssml.fallback",
+                        extra={
+                            "event": "tts.ssml.fallback",
+                            "asset_id": asset_id,
+                            "tts_engine": Config.TTS_ENGINE,
+                            "tts_model": model,
+                            "voice": voice,
+                            "tts_enable_ssml": True,
+                            "reason": (str(e) or e.__class__.__name__)[:256],
+                        },
+                    )
+                    self._run_tts_v2(
+                        SpeechSynthesizerV2,
+                        AudioFormat,
+                        model,
+                        voice,
+                        text,
+                        temp_base,
+                        enable_ssml=False,
+                        speech_rate=1.0,
+                        asset_id=asset_id,
+                    )
 
                 audio_len = _get_audio_duration_sec(temp_base)
                 diff = video_duration - audio_len
@@ -627,37 +687,87 @@ class AudioGenerator:
                     os.replace(temp_base, final_path)
                 elif diff > 0:
                     dist_ssml = _construct_distributed_ssml(text, diff)
-                    self._run_tts_v2(
-                        SpeechSynthesizerV2,
-                        AudioFormat,
-                        model,
-                        voice,
-                        dist_ssml,
-                        final_path,
-                        enable_ssml=True,
-                        speech_rate=1.0,
-                        asset_id=asset_id,
-                    )
+                    try:
+                        self._run_tts_v2(
+                            SpeechSynthesizerV2,
+                            AudioFormat,
+                            model,
+                            voice,
+                            dist_ssml,
+                            final_path,
+                            enable_ssml=True,
+                            speech_rate=1.0,
+                            asset_id=asset_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "tts.ssml.fallback",
+                            extra={
+                                "event": "tts.ssml.fallback",
+                                "asset_id": asset_id,
+                                "tts_engine": Config.TTS_ENGINE,
+                                "tts_model": model,
+                                "voice": voice,
+                                "tts_enable_ssml": True,
+                                "reason": (str(e) or e.__class__.__name__)[:256],
+                            },
+                        )
+                        self._run_tts_v2(
+                            SpeechSynthesizerV2,
+                            AudioFormat,
+                            model,
+                            voice,
+                            text,
+                            final_path,
+                            enable_ssml=False,
+                            speech_rate=1.0,
+                            asset_id=asset_id,
+                        )
                     if os.path.exists(temp_base):
                         os.remove(temp_base)
                 else:
                     safe_video_duration = max(video_duration, 0.1)
                     ratio = audio_len / safe_video_duration
                     target_rate = min(ratio, 1.25)
-                    self._run_tts_v2(
-                        SpeechSynthesizerV2,
-                        AudioFormat,
-                        model,
-                        voice,
-                        baseline_ssml,
-                        final_path,
-                        enable_ssml=True,
-                        speech_rate=target_rate,
-                        asset_id=asset_id,
-                    )
+                    try:
+                        self._run_tts_v2(
+                            SpeechSynthesizerV2,
+                            AudioFormat,
+                            model,
+                            voice,
+                            baseline_ssml,
+                            final_path,
+                            enable_ssml=True,
+                            speech_rate=target_rate,
+                            asset_id=asset_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "tts.ssml.fallback",
+                            extra={
+                                "event": "tts.ssml.fallback",
+                                "asset_id": asset_id,
+                                "tts_engine": Config.TTS_ENGINE,
+                                "tts_model": model,
+                                "voice": voice,
+                                "tts_enable_ssml": True,
+                                "reason": (str(e) or e.__class__.__name__)[:256],
+                            },
+                        )
+                        self._run_tts_v2(
+                            SpeechSynthesizerV2,
+                            AudioFormat,
+                            model,
+                            voice,
+                            text,
+                            final_path,
+                            enable_ssml=False,
+                            speech_rate=target_rate,
+                            asset_id=asset_id,
+                        )
                     if os.path.exists(temp_base):
                         os.remove(temp_base)
-            except Exception:
+            except Exception as e:
                 if os.path.exists(temp_base):
                     try:
                         os.remove(temp_base)
@@ -672,9 +782,10 @@ class AudioGenerator:
                         "tts_model": model,
                         "voice": voice,
                         "tts_enable_ssml": True,
+                        "reason": (str(e) or e.__class__.__name__)[:256],
                     },
                 )
-                self._generate_silence(video_duration, final_path)
+                raise
             
             result_map[asset_id] = final_path
             
@@ -776,8 +887,7 @@ class AudioGenerator:
                 pass
             else:
                 # Use simple V2 call
-                model = Config.TTS_MODEL or "cosyvoice-v3-flash"
-                voice = Config.TTS_VOICE or "longanyang"
+                model, voice = _normalize_tts_model_and_voice(model=Config.TTS_MODEL, voice=Config.TTS_VOICE)
                 
                 chunks = _split_text_by_limit(text or "", 2000)
                 part_files = []

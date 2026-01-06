@@ -102,6 +102,25 @@ class VideoRenderer:
         except Exception:
             return None
 
+    def _ffprobe_has_audio_stream(self, file_path: str) -> bool:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            file_path,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return False
+        out = (proc.stdout or "").strip()
+        return bool(out)
+
     def _probe_video_size(self, file_path: str) -> tuple[int, int] | None:
         info = self._ffprobe_stream_info(file_path)
         if not info:
@@ -195,6 +214,7 @@ class VideoRenderer:
         """
         final_clips = []
         temp_files_to_clean = []
+        attached_audio_count = 0
         
         output_size = None
         pending_placeholders = []
@@ -317,6 +337,7 @@ class VideoRenderer:
                     
                     # Attach Audio
                     clip = clip.set_audio(audio_clip)
+                    attached_audio_count += 1
                 else:
                     # No audio for this clip? 
                     # Keep original video duration or silence?
@@ -347,6 +368,10 @@ class VideoRenderer:
                 threads=4,
                 logger=None 
             )
+            if attached_audio_count <= 0:
+                raise RuntimeError("render produced no audio-attached clips")
+            if not self._ffprobe_has_audio_stream(output_path):
+                raise RuntimeError("rendered mp4 has no audio stream")
             
         finally:
             # Cleanup clips

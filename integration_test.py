@@ -4,6 +4,8 @@ import sys
 import os
 import argparse
 import uuid
+import subprocess
+import tempfile
 
 # Configuration
 parser = argparse.ArgumentParser()
@@ -144,6 +146,58 @@ def wait_for_asset_analysis(project_id, asset_id, timeout=300):
     print("Timeout waiting for asset analysis.")
     sys.exit(1)
 
+def _ffprobe_available() -> bool:
+    try:
+        proc = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+def _ffprobe_has_audio_stream(file_path: str) -> bool:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "csv=p=0",
+        file_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return False
+    return bool((proc.stdout or "").strip())
+
+def assert_final_video_has_audio(url: str):
+    if not url:
+        print("Final video URL missing.")
+        sys.exit(1)
+    if not _ffprobe_available():
+        print("ffprobe not available; skip audio stream check.")
+        return
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp.close()
+    try:
+        with session.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(tmp.name, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        if not _ffprobe_has_audio_stream(tmp.name):
+            print("Rendered video has no audio stream.")
+            sys.exit(1)
+        print("Rendered video audio stream: OK")
+    finally:
+        try:
+            os.remove(tmp.name)
+        except Exception:
+            pass
+
 def main():
     health_paths = ["/health", "/api/ai-video/health"]
     health_ok = False
@@ -244,6 +298,7 @@ def main():
     
     print("\n--- Test Completed Successfully ---")
     print(f"Final Video URL: {final_data.get('final_video_url')}")
+    assert_final_video_has_audio(final_data.get("final_video_url"))
 
 if __name__ == "__main__":
     main()
