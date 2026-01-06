@@ -22,6 +22,8 @@ class RequestIdFilter(logging.Filter):
             record.task_id = "-"
         return True
 
+_request_id_filter = RequestIdFilter()
+
 class JsonFormatter(logging.Formatter):
     def __init__(self, service_name: str):
         super().__init__()
@@ -102,22 +104,28 @@ def on_task_prerun(sender=None, task_id=None, task=None, args=None, kwargs=None,
             headers = req.get("headers") or {}
         except Exception:
             headers = {}
-    request_id = headers.get("request_id") or "-"
-    user_id = headers.get("user_id") or "-"
+    request_id = (
+        headers.get("request_id")
+        or getattr(req, "request_id", None)
+        or headers.get("correlation_id")
+        or getattr(req, "correlation_id", None)
+        or "-"
+    )
+    user_id = headers.get("user_id") or getattr(req, "user_id", None) or "-"
     request_id_var.set(request_id)
     user_id_var.set(user_id)
     task_id_var.set(task_id or getattr(req, "id", "-") or "-")
 
 @signals.after_setup_logger.connect
 def setup_loggers(logger, *args, **kwargs):
-    logger.addFilter(RequestIdFilter())
     for handler in logger.handlers:
+        handler.addFilter(_request_id_filter)
         handler.setFormatter(JsonFormatter("ai-scene-engine"))
 
 @signals.after_setup_task_logger.connect
 def setup_task_loggers(logger, *args, **kwargs):
-    logger.addFilter(RequestIdFilter())
     for handler in logger.handlers:
+        handler.addFilter(_request_id_filter)
         handler.setFormatter(JsonFormatter("ai-scene-engine"))
 
 if __name__ == '__main__':

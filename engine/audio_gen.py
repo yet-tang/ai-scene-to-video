@@ -234,6 +234,14 @@ def _split_text_by_limit(text: str, limit_chars: int) -> list[str]:
     return chunks if chunks else [raw]
 
 def _ffmpeg_concat_mp3(parts: list[str], output_path: str):
+    for p in parts:
+        if not _is_valid_mp3_file(p):
+            try:
+                size = os.path.getsize(p) if os.path.exists(p) else 0
+            except Exception:
+                size = -1
+            raise RuntimeError(f"invalid mp3 part: path={p}, size={size}")
+
     if len(parts) == 1:
         try:
             if parts[0] != output_path:
@@ -266,7 +274,30 @@ def _ffmpeg_concat_mp3(parts: list[str], output_path: str):
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "").strip() or "ffmpeg concat failed")
+            cmd2 = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                list_file,
+                "-ac",
+                "1",
+                "-ar",
+                "48000",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "4",
+                output_path,
+            ]
+            proc2 = subprocess.run(cmd2, capture_output=True, text=True)
+            if proc2.returncode != 0:
+                primary = (proc.stderr or proc.stdout or "").strip()
+                fallback = (proc2.stderr or proc2.stdout or "").strip()
+                raise RuntimeError((fallback or primary or "").strip() or "ffmpeg concat failed")
     finally:
         if list_file:
             try:
@@ -284,10 +315,37 @@ def _get_audio_duration_sec(file_path: str) -> float:
             file_path
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return 0.0
         val = result.stdout.strip()
         return float(val) if val else 0.0
     except Exception:
         return 0.0
+
+def _is_valid_mp3_file(file_path: str) -> bool:
+    try:
+        if not os.path.exists(file_path):
+            return False
+        if os.path.getsize(file_path) <= 0:
+            return False
+    except Exception:
+        return False
+
+    duration = _get_audio_duration_sec(file_path)
+    if duration > 0.01:
+        return True
+
+    try:
+        with open(file_path, "rb") as f:
+            head = f.read(4)
+        if head.startswith(b"ID3"):
+            return True
+        if len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+            return True
+    except Exception:
+        return False
+
+    return False
 
 def _call_tts_v2_once(
     *,
@@ -534,6 +592,7 @@ class AudioGenerator:
                     temp_base,
                     enable_ssml=True,
                     speech_rate=1.0,
+                    asset_id=asset_id,
                 )
 
                 audio_len = _get_audio_duration_sec(temp_base)
@@ -552,6 +611,7 @@ class AudioGenerator:
                         final_path,
                         enable_ssml=True,
                         speech_rate=1.0,
+                        asset_id=asset_id,
                     )
                     if os.path.exists(temp_base):
                         os.remove(temp_base)
@@ -568,6 +628,7 @@ class AudioGenerator:
                         final_path,
                         enable_ssml=True,
                         speech_rate=target_rate,
+                        asset_id=asset_id,
                     )
                     if os.path.exists(temp_base):
                         os.remove(temp_base)
@@ -595,14 +656,15 @@ class AudioGenerator:
         return result_map
 
     def _generate_silence(self, duration: float, output_path: str):
-        # Generate silence mp3 using ffmpeg
         cmd = [
             "ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=mono", 
             "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", output_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if proc.returncode != 0 or not _is_valid_mp3_file(output_path):
+            raise RuntimeError(f"failed to generate silence mp3: path={output_path}")
 
-    def _run_tts_v2(self, SpeechSynthesizerV2, AudioFormat, model, voice, payload, output_path, enable_ssml=False, speech_rate=1.0):
+    def _run_tts_v2(self, SpeechSynthesizerV2, AudioFormat, model, voice, payload, output_path, enable_ssml=False, speech_rate=1.0, asset_id: str | None = None):
         last_audio = None
         last_request_id = None
         for attempt in range(1, 4):
@@ -632,13 +694,38 @@ class AudioGenerator:
             if audio_bytes:
                 with open(output_path, "wb") as f:
                     f.write(audio_bytes)
-                return
+                if _is_valid_mp3_file(output_path):
+                    return
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+                logger.warning(
+                    "tts.invalid_audio",
+                    extra={
+                        "event": "tts.invalid_audio",
+                        "attempt": int(attempt),
+                        "request_id": request_id,
+                        "asset_id": asset_id,
+                        "output_path": output_path,
+                        "payload_len": int(len(payload or "")) if isinstance(payload, str) else None,
+                        "tts_engine": Config.TTS_ENGINE,
+                        "tts_model": model,
+                        "voice": voice,
+                        "tts_enable_ssml": bool(enable_ssml),
+                    },
+                )
+                continue
 
             logger.warning(
                 "tts.empty_audio",
                 extra={
                     "event": "tts.empty_audio",
                     "attempt": int(attempt),
+                    "request_id": request_id,
+                    "asset_id": asset_id,
+                    "output_path": output_path,
+                    "payload_len": int(len(payload or "")) if isinstance(payload, str) else None,
                     "tts_engine": Config.TTS_ENGINE,
                     "tts_model": model,
                     "voice": voice,
@@ -647,6 +734,8 @@ class AudioGenerator:
             )
         raise Exception(
             "TTS returned empty audio: "
+            f"asset_id={asset_id}; "
+            f"output_path={output_path}; "
             f"request_id={last_request_id}; "
             f"result={json.dumps(_as_jsonable(last_audio), ensure_ascii=False)}"
         )
