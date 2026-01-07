@@ -115,8 +115,11 @@ public class ProjectService {
         return TimelineResponse.builder()
                 .projectId(project.getId().toString())
                 .projectTitle(project.getTitle())
+                .status(project.getStatus())
+                .errorRequestId(project.getErrorRequestId())
+                .errorStep(project.getErrorStep())
                 .assets(assets)
-                .scriptContent(project.getScriptContent()) // Might be null initially
+                .scriptContent(project.getScriptContent())
                 .build();
     }
 

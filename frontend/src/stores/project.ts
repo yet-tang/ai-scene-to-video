@@ -137,6 +137,15 @@ export const useProjectStore = defineStore('project', () => {
       if (data.scriptContent) {
         currentProject.value.script = data.scriptContent
       }
+      if (data.status) {
+        currentProject.value.status = data.status
+      }
+      if (data.errorRequestId !== undefined) {
+        currentProject.value.errorRequestId = data.errorRequestId || ''
+      }
+      if (data.errorStep !== undefined) {
+        currentProject.value.errorStep = data.errorStep || ''
+      }
     } catch (error) {
         console.error('Failed to fetch timeline', error)
         throw error

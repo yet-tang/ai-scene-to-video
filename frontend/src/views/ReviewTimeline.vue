@@ -500,10 +500,7 @@ const pollTimelineOnce = async () => {
   timelinePollInFlight.value = true
   timelinePollCount.value += 1
   try {
-    await Promise.all([
-      projectStore.fetchTimeline(projectId),
-      projectStore.fetchProject(projectId)
-    ])
+    await projectStore.fetchTimeline(projectId)
 
     timelinePollLastOkAt.value = Date.now()
     timelinePollErrorCount.value = 0
