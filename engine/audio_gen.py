@@ -475,44 +475,163 @@ def _raise_tts_failed(prefix: str, *, request_id: str | None, result, model: str
         raise Exception(f"{prefix}: {', '.join(meta)}; {details}")
     raise Exception(f"{prefix}: {details}")
 
+def _format_exception_reason(e: Exception, limit: int = 256) -> str:
+    try:
+        s = str(e) or e.__class__.__name__
+    except Exception:
+        s = e.__class__.__name__
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = s.replace("\n", "\\n")
+    return s[:limit]
+
+def _parse_kv_from_reason(reason: str) -> dict:
+    if not isinstance(reason, str) or not reason:
+        return {}
+    out = {}
+    for key in ("status_code", "code", "message", "request_id"):
+        if key == "message":
+            m = re.search(rf"\b{re.escape(key)}=([^,;]+)", reason)
+        else:
+            m = re.search(rf"\b{re.escape(key)}=([^,;\s]+)", reason)
+        if m:
+            out[key] = m.group(1).strip()
+    return out
+
+def _classify_tts_exception(e: Exception) -> dict:
+    reason = _format_exception_reason(e, limit=512)
+    s = reason.lower()
+    if isinstance(e, UnicodeEncodeError) or "unicodeencodeerror" in s:
+        return {"tts_error_category": "invalid_text_encoding", "tts_error_detail": "unicode_encode_error"}
+    if "ssml_payload_too_long" in s:
+        return {"tts_error_category": "ssml_too_long", "tts_error_detail": "char_len_limit_2000"}
+    if "close status: 1007" in s or "1007" in s and "close status" in s:
+        return {"tts_error_category": "websocket_closed", "tts_error_detail": "close_1007"}
+    if "engine return error code: 411" in s or "error code: 411" in s:
+        return {"tts_error_category": "invalid_parameter", "tts_error_detail": "engine_411"}
+    if "invalidparameter" in s:
+        return {"tts_error_category": "invalid_parameter", "tts_error_detail": "invalidparameter"}
+    if "taskfailed" in s or "task-failed" in s:
+        return {"tts_error_category": "task_failed", "tts_error_detail": "task_failed"}
+    if "timeout" in s or "timed out" in s:
+        return {"tts_error_category": "timeout", "tts_error_detail": "timeout"}
+    if "httperror" in s or "urlerror" in s:
+        return {"tts_error_category": "network_error", "tts_error_detail": "http_url_error"}
+    if "typeerror" in s and "enable_ssml" in s:
+        return {"tts_error_category": "sdk_incompatible", "tts_error_detail": "enable_ssml_unsupported"}
+    return {"tts_error_category": "unknown", "tts_error_detail": e.__class__.__name__}
+
 def _text_to_emotional_ssml(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
         return "<speak></speak>"
 
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+    raw = re.sub(r"[\x00-\x08\x0B-\x1F\x7F]", "", raw)
+    raw = re.sub(r"[ \t]+", " ", raw)
+    raw = raw.replace("……", "…").replace("......", "…").replace(".....", "…").replace("....", "…").replace("...", "…")
+
+    raw = raw.replace("，", "，__AI_BRK_180__")
+    raw = raw.replace(",", "，__AI_BRK_180__")
+    raw = raw.replace("。", "。__AI_BRK_320__")
+    raw = raw.replace(".", "。__AI_BRK_320__")
+    raw = raw.replace("？", "？__AI_BRK_280__")
+    raw = raw.replace("?", "？__AI_BRK_280__")
+    raw = raw.replace("！", "！__AI_BRK_260__")
+    raw = raw.replace("!", "！__AI_BRK_260__")
+    raw = raw.replace("：", "：__AI_BRK_180__")
+    raw = raw.replace(":", "：__AI_BRK_180__")
+    raw = raw.replace("；", "；__AI_BRK_240__")
+    raw = raw.replace(";", "；__AI_BRK_240__")
+    raw = raw.replace("…", "__AI_BRK_650__")
+
     escaped = _xml_escape(raw, quote=True)
-    escaped = escaped.replace("\r\n", "\n").replace("\r", "\n")
-    escaped = re.sub(r"[ \t]+", " ", escaped)
-
-    escaped = escaped.replace("……", "…").replace("......", "…").replace(".....", "…").replace("....", "…").replace("...", "…")
-
-    # Standard pauses
-    escaped = escaped.replace("，", "，<break time=\"180ms\"/>")
-    escaped = escaped.replace(",", "，<break time=\"180ms\"/>")
-    escaped = escaped.replace("。", "。<break time=\"320ms\"/>")
-    escaped = escaped.replace(".", "。<break time=\"320ms\"/>")
-    escaped = escaped.replace("？", "？<break time=\"280ms\"/>")
-    escaped = escaped.replace("?", "？<break time=\"280ms\"/>")
-    escaped = escaped.replace("！", "！<break time=\"260ms\"/>")
-    escaped = escaped.replace("!", "！<break time=\"260ms\"/>")
-    escaped = escaped.replace("；", "；<break time=\"240ms\"/>")
-    escaped = escaped.replace(";", "；<break time=\"240ms\"/>")
-    escaped = escaped.replace("：", "：<break time=\"180ms\"/>")
-    escaped = escaped.replace(":", "：<break time=\"180ms\"/>")
-    escaped = escaped.replace("…", "<break time=\"650ms\"/>")
-
-    def _wrap_sentence(match: re.Match) -> str:
-        content = match.group(1) or ""
-        punct = match.group(2) or ""
-        if punct == "！":
-            return f"<prosody pitch=\"+10%\" volume=\"+2dB\">{content}{punct}</prosody>"
-        if punct == "？":
-            return f"<prosody pitch=\"+6%\">{content}{punct}</prosody>"
-        return f"<prosody rate=\"0.98\">{content}{punct}</prosody>"
-
-    escaped = re.sub(r"([^。！？]+)([。！？])", _wrap_sentence, escaped)
+    escaped = escaped.replace("__AI_BRK_180__", "<break time=\"180ms\"/>")
+    escaped = escaped.replace("__AI_BRK_320__", "<break time=\"320ms\"/>")
+    escaped = escaped.replace("__AI_BRK_280__", "<break time=\"280ms\"/>")
+    escaped = escaped.replace("__AI_BRK_260__", "<break time=\"260ms\"/>")
+    escaped = escaped.replace("__AI_BRK_240__", "<break time=\"240ms\"/>")
+    escaped = escaped.replace("__AI_BRK_650__", "<break time=\"650ms\"/>")
 
     return f"<speak>{escaped}</speak>"
+
+def _is_invalid_parameter_error(err: Exception) -> bool:
+    s = (str(err) or "").lower()
+    return ("invalidparameter" in s) or ("engine return error code: 411" in s) or ("error code: 411" in s)
+
+def _synthesize_text_to_mp3(
+    self,
+    SpeechSynthesizerV2,
+    AudioFormat,
+    *,
+    model: str,
+    voice: str,
+    text: str,
+    output_path: str,
+    prefer_ssml: bool,
+    speech_rate: float,
+    asset_id: str | None,
+) -> bool:
+    raw_text = (text or "").strip()
+    if not raw_text:
+        self._generate_silence(0.2, output_path)
+        return False
+
+    if prefer_ssml:
+        ssml = _text_to_emotional_ssml(raw_text)
+        if _cosyvoice_char_len(ssml) <= 2000:
+            self._run_tts_v2(
+                SpeechSynthesizerV2,
+                AudioFormat,
+                model,
+                voice,
+                ssml,
+                output_path,
+                enable_ssml=True,
+                speech_rate=speech_rate,
+                asset_id=asset_id,
+            )
+            return True
+
+    chunks = _split_text_by_limit(raw_text, 2000)
+    if len(chunks) == 1:
+        self._run_tts_v2(
+            SpeechSynthesizerV2,
+            AudioFormat,
+            model,
+            voice,
+            chunks[0],
+            output_path,
+            enable_ssml=False,
+            speech_rate=speech_rate,
+            asset_id=asset_id,
+        )
+        return False
+
+    part_files: list[str] = []
+    try:
+        for idx, chunk in enumerate(chunks):
+            part_path = f"{output_path}.part{idx}.mp3"
+            self._run_tts_v2(
+                SpeechSynthesizerV2,
+                AudioFormat,
+                model,
+                voice,
+                chunk,
+                part_path,
+                enable_ssml=False,
+                speech_rate=speech_rate,
+                asset_id=asset_id,
+            )
+            part_files.append(part_path)
+        _ffmpeg_concat_mp3(part_files, output_path)
+        return False
+    finally:
+        for p in part_files:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
     """
@@ -522,10 +641,21 @@ def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
     if not raw:
         return f"<speak><break time=\"{int(total_silence_sec * 1000)}ms\"/></speak>"
     
+    raw = raw.replace("，", "，__AI_P__")
+    raw = raw.replace(",", "，__AI_P__")
+    raw = raw.replace("。", "。__AI_P__")
+    raw = raw.replace(".", "。__AI_P__")
+    raw = raw.replace("？", "？__AI_P__")
+    raw = raw.replace("?", "？__AI_P__")
+    raw = raw.replace("！", "！__AI_P__")
+    raw = raw.replace("!", "！__AI_P__")
+    raw = raw.replace("；", "；__AI_P__")
+    raw = raw.replace(";", "；__AI_P__")
+
     escaped = _xml_escape(raw, quote=True)
     
     # Identify slots: comma, period, question, exclamation
-    puncts = ["，", ",", "。", ".", "？", "?", "！", "!", "；", ";"]
+    puncts = ["，", "。", "？", "！", "；"]
     
     # Count occurrences
     count = 0
@@ -545,11 +675,11 @@ def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
     for p in puncts:
         # Base pause for this punct
         base_ms = 0
-        if p in "，,": base_ms = 180
-        elif p in "。.": base_ms = 320
-        elif p in "？?": base_ms = 280
-        elif p in "！!": base_ms = 260
-        elif p in "；;": base_ms = 240
+        if p == "，": base_ms = 180
+        elif p == "。": base_ms = 320
+        elif p == "？": base_ms = 280
+        elif p == "！": base_ms = 260
+        elif p == "；": base_ms = 240
         
         final_ms = base_ms + per_slot_add_ms
         replacement = f"{p}<break time=\"{final_ms}ms\"/>"
@@ -558,6 +688,7 @@ def _construct_distributed_ssml(text: str, total_silence_sec: float) -> str:
     if remaining_ms > 0:
         escaped = f"{escaped}<break time=\"{int(remaining_ms)}ms\"/>"
 
+    escaped = escaped.replace("__AI_P__", "")
     return f"<speak>{escaped}</speak>"
 
 def _normalize_tts_model_and_voice(*, model: str | None, voice: str | None):
@@ -640,22 +771,24 @@ class AudioGenerator:
                 continue
                 
             temp_base = os.path.join(output_dir, f"{asset_id}_base.mp3")
-            baseline_ssml = _text_to_emotional_ssml(text)
+            used_ssml = False
 
             try:
                 try:
-                    self._run_tts_v2(
+                    used_ssml = _synthesize_text_to_mp3(
+                        self,
                         SpeechSynthesizerV2,
                         AudioFormat,
-                        model,
-                        voice,
-                        baseline_ssml,
-                        temp_base,
-                        enable_ssml=True,
+                        model=model,
+                        voice=voice,
+                        text=text,
+                        output_path=temp_base,
+                        prefer_ssml=bool(Config.TTS_ENABLE_SSML),
                         speech_rate=1.0,
                         asset_id=asset_id,
                     )
                 except Exception as e:
+                    err_struct = _classify_tts_exception(e)
                     logger.warning(
                         "tts.ssml.fallback",
                         extra={
@@ -665,17 +798,21 @@ class AudioGenerator:
                             "tts_model": model,
                             "voice": voice,
                             "tts_enable_ssml": True,
-                            "reason": (str(e) or e.__class__.__name__)[:256],
+                            "reason": _format_exception_reason(e, limit=256),
+                            **err_struct,
+                            **_parse_kv_from_reason(_format_exception_reason(e, limit=512)),
                         },
                     )
-                    self._run_tts_v2(
+                    used_ssml = False
+                    _synthesize_text_to_mp3(
+                        self,
                         SpeechSynthesizerV2,
                         AudioFormat,
-                        model,
-                        voice,
-                        text,
-                        temp_base,
-                        enable_ssml=False,
+                        model=model,
+                        voice=voice,
+                        text=text,
+                        output_path=temp_base,
+                        prefer_ssml=False,
                         speech_rate=1.0,
                         asset_id=asset_id,
                     )
@@ -686,62 +823,40 @@ class AudioGenerator:
                 if abs(diff) < 0.5:
                     os.replace(temp_base, final_path)
                 elif diff > 0:
-                    dist_ssml = _construct_distributed_ssml(text, diff)
+                    silence_path = os.path.join(output_dir, f"{asset_id}_pad.mp3")
                     try:
-                        self._run_tts_v2(
-                            SpeechSynthesizerV2,
-                            AudioFormat,
-                            model,
-                            voice,
-                            dist_ssml,
-                            final_path,
-                            enable_ssml=True,
-                            speech_rate=1.0,
-                            asset_id=asset_id,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "tts.ssml.fallback",
-                            extra={
-                                "event": "tts.ssml.fallback",
-                                "asset_id": asset_id,
-                                "tts_engine": Config.TTS_ENGINE,
-                                "tts_model": model,
-                                "voice": voice,
-                                "tts_enable_ssml": True,
-                                "reason": (str(e) or e.__class__.__name__)[:256],
-                            },
-                        )
-                        self._run_tts_v2(
-                            SpeechSynthesizerV2,
-                            AudioFormat,
-                            model,
-                            voice,
-                            text,
-                            final_path,
-                            enable_ssml=False,
-                            speech_rate=1.0,
-                            asset_id=asset_id,
-                        )
-                    if os.path.exists(temp_base):
-                        os.remove(temp_base)
+                        self._generate_silence(diff, silence_path)
+                        _ffmpeg_concat_mp3([temp_base, silence_path], final_path)
+                    finally:
+                        if os.path.exists(temp_base):
+                            try:
+                                os.remove(temp_base)
+                            except Exception:
+                                pass
+                        if os.path.exists(silence_path):
+                            try:
+                                os.remove(silence_path)
+                            except Exception:
+                                pass
                 else:
                     safe_video_duration = max(video_duration, 0.1)
                     ratio = audio_len / safe_video_duration
                     target_rate = min(ratio, 1.25)
                     try:
-                        self._run_tts_v2(
+                        _synthesize_text_to_mp3(
+                            self,
                             SpeechSynthesizerV2,
                             AudioFormat,
-                            model,
-                            voice,
-                            baseline_ssml,
-                            final_path,
-                            enable_ssml=True,
+                            model=model,
+                            voice=voice,
+                            text=text,
+                            output_path=final_path,
+                            prefer_ssml=bool(Config.TTS_ENABLE_SSML) and used_ssml,
                             speech_rate=target_rate,
                             asset_id=asset_id,
                         )
                     except Exception as e:
+                        err_struct = _classify_tts_exception(e)
                         logger.warning(
                             "tts.ssml.fallback",
                             extra={
@@ -751,17 +866,20 @@ class AudioGenerator:
                                 "tts_model": model,
                                 "voice": voice,
                                 "tts_enable_ssml": True,
-                                "reason": (str(e) or e.__class__.__name__)[:256],
+                                "reason": _format_exception_reason(e, limit=256),
+                                **err_struct,
+                                **_parse_kv_from_reason(_format_exception_reason(e, limit=512)),
                             },
                         )
-                        self._run_tts_v2(
+                        _synthesize_text_to_mp3(
+                            self,
                             SpeechSynthesizerV2,
                             AudioFormat,
-                            model,
-                            voice,
-                            text,
-                            final_path,
-                            enable_ssml=False,
+                            model=model,
+                            voice=voice,
+                            text=text,
+                            output_path=final_path,
+                            prefer_ssml=False,
                             speech_rate=target_rate,
                             asset_id=asset_id,
                         )
@@ -804,15 +922,25 @@ class AudioGenerator:
         last_audio = None
         last_request_id = None
         for attempt in range(1, 4):
-            audio, request_id = _call_tts_v2_once(
-                SpeechSynthesizerV2=SpeechSynthesizerV2,
-                AudioFormat=AudioFormat,
-                model=model,
-                voice=voice,
-                payload=payload,
-                enable_ssml=enable_ssml,
-                speech_rate=speech_rate,
-            )
+            try:
+                if enable_ssml and isinstance(payload, str) and _cosyvoice_char_len(payload) > 2000:
+                    raise Exception("ssml_payload_too_long")
+                audio, request_id = _call_tts_v2_once(
+                    SpeechSynthesizerV2=SpeechSynthesizerV2,
+                    AudioFormat=AudioFormat,
+                    model=model,
+                    voice=voice,
+                    payload=payload,
+                    enable_ssml=enable_ssml,
+                    speech_rate=speech_rate,
+                )
+            except Exception as e:
+                if enable_ssml and _is_invalid_parameter_error(e):
+                    raise
+                if attempt >= 3:
+                    raise
+                time.sleep(0.4 * attempt)
+                continue
             last_audio = audio
             last_request_id = request_id
 
@@ -821,7 +949,12 @@ class AudioGenerator:
                 status_code = audio.get("status_code")
 
             if status_code is not None and int(status_code) != int(HTTPStatus.OK):
-                _raise_tts_failed("TTS failed", request_id=request_id, result=audio, model=model, voice=voice)
+                try:
+                    _raise_tts_failed("TTS failed", request_id=request_id, result=audio, model=model, voice=voice)
+                except Exception as e:
+                    if enable_ssml and _is_invalid_parameter_error(e):
+                        raise
+                    raise
 
             audio_bytes = _bytes_from_audio(audio)
             if not audio_bytes and isinstance(audio, str):
