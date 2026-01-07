@@ -13,11 +13,14 @@ import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.HashMap;
 import java.util.Map;
@@ -32,6 +35,9 @@ public class ProjectController {
 
     @Value("${app.dev-reset-enabled:false}")
     private boolean devResetEnabled;
+
+    @Value("${app.upload.allowed-content-types}")
+    private List<String> allowedContentTypes;
 
     @GetMapping
     public ResponseEntity<Page<ProjectListItemResponse>> listProjects(
@@ -69,6 +75,7 @@ public class ProjectController {
             @PathVariable UUID id,
             @RequestParam String filename,
             @RequestParam String contentType) {
+        validateContentType(contentType);
         String objectKey = UUID.randomUUID() + "-" + filename;
         PresignedUrlResponse response = storageService.generatePresignedUrl(objectKey, contentType);
         return ResponseEntity.ok(response);
@@ -76,26 +83,55 @@ public class ProjectController {
 
     @PostMapping("/{id}/assets/confirm")
     public ResponseEntity<Asset> confirmAsset(@PathVariable UUID id, @RequestBody AssetConfirmRequest request) {
+        validateContentType(request == null ? null : request.getContentType());
         Asset asset = projectService.confirmAsset(id, request);
         return ResponseEntity.ok(asset);
     }
 
     @PostMapping("/{id}/assets")
     public ResponseEntity<Asset> uploadAsset(@PathVariable UUID id, @RequestParam("file") MultipartFile file) {
+        validateContentType(file == null ? null : file.getContentType());
         Asset asset = projectService.uploadAsset(id, file);
         return ResponseEntity.ok(asset);
     }
 
     @PostMapping("/{id}/assets/local")
     public ResponseEntity<Asset> uploadAssetLocal(@PathVariable UUID id, @RequestParam("file") MultipartFile file) {
+        validateContentType(file == null ? null : file.getContentType());
         Asset asset = projectService.uploadAssetLocal(id, file);
         return ResponseEntity.ok(asset);
     }
 
+    private void validateContentType(String contentType) {
+        String normalized = normalizeContentType(contentType);
+        if (normalized == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing Content-Type");
+        }
+        if (allowedContentTypes == null || allowedContentTypes.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Upload content-type whitelist is not configured");
+        }
+        if (!allowedContentTypes.contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported Content-Type");
+        }
+    }
+
+    private String normalizeContentType(String contentType) {
+        if (contentType == null) {
+            return null;
+        }
+        String trimmed = contentType.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        int semi = trimmed.indexOf(';');
+        if (semi >= 0) {
+            trimmed = trimmed.substring(0, semi);
+        }
+        return trimmed.trim().toLowerCase();
+    }
+
     @PutMapping("/{projectId}/assets/{assetId}")
     public ResponseEntity<Asset> updateAsset(@PathVariable UUID projectId, @PathVariable UUID assetId, @RequestBody UpdateAssetRequest request) {
-        // We currently don't check if assetId belongs to projectId in Service (assumes valid assetId),
-        // but for REST consistency we keep the URL structure.
         Asset asset = projectService.updateAsset(assetId, request);
         return ResponseEntity.ok(asset);
     }
@@ -142,15 +178,7 @@ public class ProjectController {
 
     @PostMapping("/{id}/audio")
     public ResponseEntity<Void> generateAudio(@PathVariable UUID id, @RequestBody(required = false) String scriptContent) {
-        // If scriptContent is null, service will pull from DB? No, current impl expects it.
-        // Let's assume frontend sends it.
         if (scriptContent == null) {
-            // Fallback fetch from DB if needed, but for now expect it
-            // Or better: fetch project.getScriptContent() inside service if arg is null.
-            // My service implementation: `taskQueueService.submitAudioGenerationTask(projectId, scriptContent);`
-            // So if null, it will fail or generate silence.
-            // Let's force frontend to send it for now (confirming edits).
-            // Or better:
             Project p = projectService.getProject(id);
             scriptContent = p.getScriptContent(); 
         }

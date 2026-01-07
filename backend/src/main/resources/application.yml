@@ -61,3 +61,11 @@ app:
   celery:
     queue-name: ai-video:celery
   dev-reset-enabled: ${APP_DEV_RESET_ENABLED:false}
+  upload:
+    allowed-content-types:
+      - video/mp4
+      - video/quicktime
+      - video/x-m4v
+      - video/webm
+      - video/3gpp
+      - video/3gpp2

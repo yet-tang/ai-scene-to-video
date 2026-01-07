@@ -112,6 +112,13 @@
               preload="metadata"
               playsinline
             ></video>
+            <div v-if="item.status === 'uploading'" class="upload-overlay">
+              <van-progress :percentage="item.percentage ?? 0" :show-pivot="false" stroke-width="6" />
+              <div class="upload-text">{{ item.percentage ?? 0 }}%</div>
+            </div>
+            <div v-else-if="item.status === 'failed'" class="upload-overlay failed">
+              <div class="upload-text">失败</div>
+            </div>
             <div class="delete-mask" @click.stop="removeFile(index)">
               <van-icon name="cross" size="12" />
             </div>
@@ -204,7 +211,46 @@ const afterRead = (file: any) => {
   files.forEach((f: any) => {
     if (f.file) {
       f.objectUrl = URL.createObjectURL(f.file)
+      f.status = ''
+      f.message = ''
+      f.percentage = 0
     }
+  })
+}
+
+const uploadToS3WithProgress = (uploadUrl: string, headers: Record<string, string>, file: File, onProgress: (pct: number) => void) => {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', uploadUrl, true)
+
+    Object.entries(headers || {}).forEach(([k, v]) => {
+      xhr.setRequestHeader(k, v)
+    })
+
+    xhr.upload.onprogress = (evt) => {
+      if (!evt.lengthComputable) return
+      const pct = Math.max(0, Math.min(100, Math.round((evt.loaded / evt.total) * 100)))
+      onProgress(pct)
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100)
+        resolve()
+        return
+      }
+      reject(new Error(`S3 Upload failed: ${xhr.status} ${xhr.statusText}`))
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('S3 Upload failed: network error'))
+    }
+
+    xhr.onabort = () => {
+      reject(new Error('S3 Upload aborted'))
+    }
+
+    xhr.send(file)
   })
 }
 
@@ -235,14 +281,32 @@ const onSubmit = async () => {
     const projectId = createRes.data.id
     console.log('Project created:', projectId)
 
-    // 2. 上传文件 (FormData 模式，上传到后端本地)
+    // 2. 上传文件 (Presigned URL 直传模式)
     const uploadPromises = fileList.value.map(async (fileItem) => {
       try {
         fileItem.status = 'uploading'
-        fileItem.message = '0%'
+        fileItem.message = '准备中'
+        fileItem.percentage = 0
 
-        // 使用 FormData 直接上传 (强制使用 Local Upload 接口)
-        await projectApi.uploadAssetLocal(projectId, fileItem.file)
+        const file = fileItem.file
+        const contentType = file.type || 'application/octet-stream'
+        const presignRes = await projectApi.getPresignedUrl(projectId, file.name, contentType)
+        const { uploadUrl, signedHeaders, objectKey } = presignRes.data
+
+        fileItem.message = '上传中'
+        await uploadToS3WithProgress(uploadUrl, signedHeaders, file, (pct) => {
+          fileItem.percentage = pct
+          fileItem.message = `${pct}%`
+        })
+
+        fileItem.message = '登记中'
+
+        await projectApi.confirmAsset(projectId, {
+          objectKey: objectKey,
+          filename: file.name,
+          contentType: contentType,
+          size: file.size
+        })
 
         fileItem.status = 'done'
         fileItem.message = '完成'
@@ -396,6 +460,32 @@ const onSubmit = async () => {
   color: #fff;
   cursor: pointer;
   z-index: 1;
+}
+
+.upload-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.upload-overlay.failed {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.upload-text {
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .upload-placeholder {

@@ -14,11 +14,13 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
@@ -66,9 +68,11 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
-        MockMultipartFile file = new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes());
+        MockMultipartFile file = new MockMultipartFile("file", "a.mp4", "video/mp4", "x".getBytes());
         Asset asset = Asset.builder().id(UUID.randomUUID()).build();
         when(projectService.uploadAsset(id, file)).thenReturn(asset);
+
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/mp4"));
 
         var resp = controller.uploadAsset(id, file);
 
@@ -83,9 +87,11 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
-        MockMultipartFile file = new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes());
+        MockMultipartFile file = new MockMultipartFile("file", "a.mov", "video/quicktime", "x".getBytes());
         Asset asset = Asset.builder().id(UUID.randomUUID()).build();
         when(projectService.uploadAssetLocal(id, file)).thenReturn(asset);
+
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/quicktime"));
 
         var resp = controller.uploadAssetLocal(id, file);
 
@@ -106,15 +112,16 @@ class ProjectControllerTest {
                 .objectKey("k")
                 .signedHeaders(java.util.Map.of())
                 .build();
-        when(storageService.generatePresignedUrl(any(String.class), eq("text/plain"))).thenReturn(respBody);
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/mp4"));
+        when(storageService.generatePresignedUrl(any(String.class), eq("video/mp4"))).thenReturn(respBody);
 
-        var resp = controller.getPresignedUrl(id, "a.txt", "text/plain");
+        var resp = controller.getPresignedUrl(id, "a.mp4", "video/mp4");
 
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).isSameAs(respBody);
         var keyCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(storageService).generatePresignedUrl(keyCaptor.capture(), eq("text/plain"));
-        assertThat(keyCaptor.getValue()).contains("-a.txt");
+        verify(storageService).generatePresignedUrl(keyCaptor.capture(), eq("video/mp4"));
+        assertThat(keyCaptor.getValue()).contains("-a.mp4");
     }
 
     @Test
@@ -125,13 +132,43 @@ class ProjectControllerTest {
 
         UUID id = UUID.randomUUID();
         AssetConfirmRequest req = new AssetConfirmRequest();
+        req.setContentType("video/mp4");
         Asset asset = Asset.builder().id(UUID.randomUUID()).build();
         when(projectService.confirmAsset(id, req)).thenReturn(asset);
+
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/mp4"));
 
         var resp = controller.confirmAsset(id, req);
 
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).isSameAs(asset);
+    }
+
+    @Test
+    void getPresignedUrl_rejectsUnsupportedContentType() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/mp4"));
+
+        assertThatThrownBy(() -> controller.getPresignedUrl(UUID.randomUUID(), "a.mov", "video/quicktime"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode().value()).isEqualTo(400));
+    }
+
+    @Test
+    void confirmAsset_rejectsUnsupportedContentType() {
+        ProjectService projectService = Mockito.mock(ProjectService.class);
+        StorageService storageService = Mockito.mock(StorageService.class);
+        ProjectController controller = new ProjectController(projectService, storageService);
+        ReflectionTestUtils.setField(controller, "allowedContentTypes", List.of("video/mp4"));
+
+        AssetConfirmRequest req = new AssetConfirmRequest();
+        req.setContentType("video/quicktime");
+
+        assertThatThrownBy(() -> controller.confirmAsset(UUID.randomUUID(), req))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode().value()).isEqualTo(400));
     }
 
     @Test
