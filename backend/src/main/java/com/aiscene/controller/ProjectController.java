@@ -36,7 +36,7 @@ public class ProjectController {
     @Value("${app.dev-reset-enabled:false}")
     private boolean devResetEnabled;
 
-    @Value("${app.upload.allowed-content-types}")
+    @Value("${app.upload.allowed-content-types:video/mp4,video/quicktime,video/x-m4v,video/webm,video/3gpp,video/3gpp2}")
     private List<String> allowedContentTypes;
 
     @GetMapping
