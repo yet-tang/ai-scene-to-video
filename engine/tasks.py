@@ -3,6 +3,7 @@ from vision import SceneDetector
 from script_gen import ScriptGenerator
 from audio_gen import AudioGenerator
 from video_render import VideoRenderer
+from aliyun_client import AliyunClient
 from config import Config
 import json
 import logging
@@ -144,7 +145,17 @@ def _is_http_url(url: str) -> bool:
     except Exception:
         return False
 
-def _download_to_temp(video_url: str) -> str:
+def _infer_suffix_from_url(url: str, default_suffix: str) -> str:
+    try:
+        path = urlparse(url).path or ""
+        _, ext = os.path.splitext(path)
+        if ext and len(ext) <= 8:
+            return ext
+    except Exception:
+        pass
+    return default_suffix
+
+def _download_to_temp(video_url: str, *, suffix: str = ".mp4") -> str:
     started = time.monotonic()
     # Support local file protocol for optimization
     if video_url.startswith("file://"):
@@ -161,7 +172,7 @@ def _download_to_temp(video_url: str) -> str:
         if base:
             video_url = f"{base}/{filename}"
     
-    temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    temp_video = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     temp_video.close()
     _log_info("download.start", url_host=_url_host(video_url))
     urllib.request.urlretrieve(video_url, temp_video.name)
@@ -630,6 +641,7 @@ detector = SceneDetector()
 script_gen = ScriptGenerator()
 audio_gen = AudioGenerator()
 video_render = VideoRenderer()
+aliyun_client = AliyunClient()
 
 @celery_app.task(bind=True, max_retries=3)
 def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
@@ -964,7 +976,7 @@ def generate_audio_task(self, project_id: str, script_content: str):
         raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=12)
-def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path: str):
+def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path: str, bgm_url: str = None):
     """
     Background task to render final video.
     """
@@ -987,6 +999,15 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
         # 2. Re-generate aligned audio segments locally
         segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
         
+        # Download BGM if provided
+        bgm_path = None
+        if bgm_url:
+            try:
+                bgm_suffix = _infer_suffix_from_url(bgm_url, ".mp3")
+                bgm_path = _download_to_temp(bgm_url, suffix=bgm_suffix)
+            except Exception as e:
+                logger.warning(f"Failed to download BGM: {e}")
+
         with tempfile.TemporaryDirectory() as temp_dir:
             # Generate aligned segments
             audio_map = audio_gen.generate_aligned_audio_segments(segments, temp_dir)
@@ -995,7 +1016,7 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
             temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
             temp_video.close()
             
-            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name)
+            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name, bgm_path=bgm_path)
 
             # 4. Upload
             file_name = f"rendered_{project_id}.mp4"
@@ -1017,6 +1038,8 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
                 conn.close()
 
             if os.path.exists(output_path): os.remove(output_path)
+            if bgm_path and os.path.exists(bgm_path) and not (bgm_url or "").startswith("file://"):
+                os.remove(bgm_path)
             
         return {"project_id": project_id, "video_url": final_video_url}
 
@@ -1038,13 +1061,22 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
         raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
 @celery_app.task(bind=True, max_retries=3)
-def render_pipeline_task(self, project_id: str, script_content: str, _timeline_assets: list):
+def render_pipeline_task(self, project_id: str, script_content: str, _timeline_assets: list, bgm_url: str = None):
     started = time.monotonic()
     try:
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("COMPLETED",))
         
         segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
         
+        # Download BGM
+        bgm_path = None
+        if bgm_url:
+            try:
+                bgm_suffix = _infer_suffix_from_url(bgm_url, ".mp3")
+                bgm_path = _download_to_temp(bgm_url, suffix=bgm_suffix)
+            except Exception as e:
+                logger.warning(f"Failed to download BGM: {e}")
+
         with tempfile.TemporaryDirectory() as temp_dir:
             # Audio
             audio_map = audio_gen.generate_aligned_audio_segments(segments, temp_dir)
@@ -1084,7 +1116,7 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
             temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
             temp_video.close()
             
-            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name)
+            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name, bgm_path=bgm_path)
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")
             
@@ -1105,6 +1137,8 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 
             if os.path.exists(preview_path): os.remove(preview_path)
             if os.path.exists(output_path): os.remove(output_path)
+            if bgm_path and os.path.exists(bgm_path) and not (bgm_url or "").startswith("file://"):
+                os.remove(bgm_path)
             
         return {
             "project_id": project_id,
@@ -1128,3 +1162,47 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
             )
             raise
         raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
+
+@celery_app.task(bind=True)
+def enhance_video_task(self, project_id: str, asset_id: str, prompt: str):
+    """
+    Apply Aliyun Video Repainting to a specific asset to enhance its visual style.
+    """
+    # Fetch asset source
+    asset_source = _fetch_asset_source(asset_id)
+    if not asset_source:
+        raise ValueError(f"Asset {asset_id} not found")
+        
+    video_url = asset_source.get("oss_url")
+    if not video_url:
+         raise ValueError(f"Asset {asset_id} has no URL")
+         
+    try:
+        # Use Aliyun Client
+        new_video_url = aliyun_client.video_repainting(video_url, prompt)
+        enhanced_local = _download_to_temp(new_video_url, suffix=".mp4")
+        try:
+            object_key = f"enhanced/{project_id}/{asset_id}/{uuid.uuid4()}.mp4"
+            enhanced_public_url = upload_to_s3(enhanced_local, object_key, content_type="video/mp4")
+        finally:
+            if os.path.exists(enhanced_local):
+                os.remove(enhanced_local)
+
+        conn = psycopg2.connect(Config.DB_DSN)
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE assets SET oss_url = %s WHERE id = %s",
+                        (enhanced_public_url, asset_id),
+                    )
+        finally:
+            conn.close()
+
+        return {"project_id": project_id, "asset_id": asset_id, "new_url": enhanced_public_url}
+        
+    except Exception as e:
+        logger.error(f"Enhancement failed: {e}")
+        # Note: We don't necessarily fail the project if enhancement fails, 
+        # but we should log it.
+        raise

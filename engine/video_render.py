@@ -1,4 +1,4 @@
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx
 from config import Config
 import boto3
 import json
@@ -207,10 +207,34 @@ class VideoRenderer:
         clip = ColorClip(size=(size or (1280, 720)), color=(0, 0, 0), duration=safe_dur)
         return clip
 
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str) -> str:
+    def _apply_warm_filter(self, clip):
+        """
+        Apply a warm sunshine look using numpy:
+        - Increase brightness/contrast slightly
+        - Warm tint (Red++, Blue--)
+        """
+        try:
+            def filter_warm(image):
+                # image is numpy array [h, w, 3] (RGB)
+                import numpy as np
+                img = image.astype(float)
+                # Warm tint: R*1.1, G*1.0, B*0.9
+                img[:,:,0] *= 1.1 
+                img[:,:,2] *= 0.9 
+                # Slight Brightness increase
+                img += 10.0
+                np.clip(img, 0, 255, out=img)
+                return img.astype('uint8')
+            
+            return clip.fl_image(filter_warm)
+        except Exception:
+            return clip
+
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
+        bgm_path: optional path to background music file
         """
         final_clips = []
         temp_files_to_clean = []
@@ -226,6 +250,9 @@ class VideoRenderer:
                 asset_id = asset.get('id')
                 asset_duration = float(asset.get("duration") or 0.0)
                 
+                # Check for visual prompt (simulated logic for now, or just apply warm filter to all)
+                # Ideally we check asset.get('visual_prompt')
+                
                 if not url and not asset.get("storage_key"):
                     continue
                     
@@ -235,6 +262,8 @@ class VideoRenderer:
                 
                 try:
                     clip = self._open_video_clip(local_video_path)
+                    # Apply Warm Filter (Global for "Warm Life Style")
+                    clip = self._apply_warm_filter(clip)
                 except Exception:
                     clip = None
                     
@@ -357,6 +386,33 @@ class VideoRenderer:
 
             # 4. Concatenate All
             final_video = concatenate_videoclips(final_clips, method="compose")
+
+            # --- Audio Mixing (TTS + BGM) ---
+            from moviepy.editor import AudioFileClip, CompositeAudioClip
+            
+            audio_tracks = []
+            if final_video.audio:
+                audio_tracks.append(final_video.audio)
+            
+            if bgm_path and os.path.exists(bgm_path):
+                try:
+                    bgm_clip = AudioFileClip(bgm_path)
+                    # Loop BGM if shorter
+                    if bgm_clip.duration < final_video.duration:
+                        bgm_clip = bgm_clip.fx(afx.audio_loop, duration=final_video.duration)
+                    else:
+                        bgm_clip = bgm_clip.subclip(0, final_video.duration)
+                    
+                    # Volume 15%
+                    bgm_clip = bgm_clip.volumex(0.15)
+                    audio_tracks.append(bgm_clip)
+                except Exception as e:
+                    logger.warning(f"Failed to load BGM: {e}")
+
+            if len(audio_tracks) > 1:
+                final_audio = CompositeAudioClip(audio_tracks)
+                final_video = final_video.set_audio(final_audio)
+            # --------------------------------
 
             # 5. Write Output
             final_video.write_videofile(
