@@ -76,7 +76,7 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
           build-args: |
-            ${{ matrix.service.name == 'frontend' && format('VITE_API_BASE_URL={0}', secrets.VITE_API_BASE_URL) || '' }}
+            ${{ matrix.service.name == 'frontend' && format('VITE_API_BASE_URL={0}', vars.VITE_API_BASE_URL) || '' }}
             ${{ matrix.service.name == 'frontend' && format('VITE_API_KEY={0}', secrets.VITE_API_KEY) || '' }}
 
       - name: Output image info
