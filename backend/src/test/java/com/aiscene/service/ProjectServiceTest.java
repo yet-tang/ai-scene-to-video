@@ -588,4 +588,97 @@ class ProjectServiceTest {
         verify(projectRepository).findAll(any(Pageable.class));
         verify(projectRepository).findAllByUserId(eq(1L), any(Pageable.class));
     }
+
+    @Test
+    void updateScriptContentWithUserId_updatesWhenOwnerMatches() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        projectService.updateScriptContent(projectId, "new script", 123L);
+
+        assertThat(project.getScriptContent()).isEqualTo("new script");
+        assertThat(project.getStatus()).isEqualTo(ProjectStatus.SCRIPT_GENERATED);
+        verify(projectRepository).save(project);
+    }
+
+    @Test
+    void updateScriptContentWithUserId_throwsWhenOwnerDoesNotMatch() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.updateScriptContent(projectId, "new script", 456L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Forbidden");
+        verify(projectRepository, never()).save(any(Project.class));
+    }
+
+    @Test
+    void updateScriptContentWithUserId_allowsWhenUserIdIsNull() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        projectService.updateScriptContent(projectId, "new script", null);
+
+        assertThat(project.getScriptContent()).isEqualTo("new script");
+        verify(projectRepository).save(project);
+    }
+
+    @Test
+    void retryRender_rendersWhenOwnerMatches() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
+                Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
+        ));
+
+        projectService.retryRender(projectId, 123L);
+
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("script"), any(List.class), any());
+        verify(projectRepository).updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING));
+    }
+
+    @Test
+    void retryRender_throwsWhenOwnerDoesNotMatch() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.retryRender(projectId, 456L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Forbidden");
+        verify(projectRepository, never()).updateStatusIfIn(any(), any(), any());
+    }
+
+    @Test
+    void retryRender_allowsWhenUserIdIsNull() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
+        when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
+                Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
+        ));
+
+        projectService.retryRender(projectId, null);
+
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("script"), any(List.class), any());
+    }
+
+    @Test
+    void validateProjectOwnership_throwsWhenProjectUserIdIsNull() {
+        UUID projectId = UUID.randomUUID();
+        Project project = Project.builder().id(projectId).userId(null).status(ProjectStatus.DRAFT).build();
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+
+        assertThatThrownBy(() -> projectService.updateScriptContent(projectId, "script", 123L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Forbidden");
+    }
 }

@@ -1,4 +1,4 @@
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip, CompositeAudioClip
 from config import Config
 import boto3
 import json
@@ -469,7 +469,6 @@ class VideoRenderer:
             return bgm_audio
         
         try:
-            from moviepy.audio.AudioClip import CompositeAudioClip
             import numpy as np
             
             # Build ducking envelope
@@ -780,8 +779,6 @@ class VideoRenderer:
             # ------------------------------------------
 
             # --- Audio Mixing (TTS + BGM + SFX) ---
-            from moviepy.editor import AudioFileClip, CompositeAudioClip
-            
             audio_tracks = []
             if final_video.audio:
                 audio_tracks.append(final_video.audio)
