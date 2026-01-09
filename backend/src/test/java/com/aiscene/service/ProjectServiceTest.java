@@ -9,6 +9,7 @@ import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
 import com.aiscene.repository.AssetRepository;
 import com.aiscene.repository.ProjectRepository;
+import com.aiscene.config.BgmConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,6 +57,9 @@ class ProjectServiceTest {
 
     @Mock
     private JdbcTemplate jdbcTemplate;
+
+    @Mock
+    private BgmConfig bgmConfig;
 
     @InjectMocks
     private ProjectService projectService;
@@ -182,7 +186,7 @@ class ProjectServiceTest {
 
         projectService.renderVideo(projectId);
 
-        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("content"), any(List.class));
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("content"), any(List.class), any());
         verify(projectRepository).updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING));
     }
 
