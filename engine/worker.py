@@ -140,5 +140,31 @@ except Exception as e:
     import logging
     logging.error(f"Configuration validation failed: {e}")
 
+# Configure MoviePy to use ImageMagick for TextClip rendering
+try:
+    from moviepy.config import change_settings
+    import subprocess
+    import os
+    
+    # Try to find ImageMagick binary
+    imagemagick_binary = None
+    for cmd in ['magick', 'convert']:
+        try:
+            result = subprocess.run(['which', cmd], capture_output=True, text=True)
+            if result.returncode == 0:
+                imagemagick_binary = result.stdout.strip()
+                break
+        except Exception:
+            pass
+    
+    if imagemagick_binary:
+        change_settings({"IMAGEMAGICK_BINARY": imagemagick_binary})
+        logging.info(f"MoviePy ImageMagick configured: {imagemagick_binary}")
+    else:
+        logging.warning("ImageMagick not found - subtitle rendering may fail")
+except Exception as e:
+    import logging
+    logging.warning(f"Failed to configure MoviePy ImageMagick: {e}")
+
 if __name__ == '__main__':
     celery_app.start()

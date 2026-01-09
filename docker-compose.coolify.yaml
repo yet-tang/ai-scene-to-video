@@ -2,10 +2,7 @@ version: '3.8'
 
 services:
   ai-scene-backend:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
-    image: ai-scene-backend:latest
+    image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-backend:${IMAGE_TAG:-latest}
     container_name: ai-scene-backend
     ports:
       - "8090:8090"
@@ -36,10 +33,7 @@ services:
       - coolify
 
   ai-scene-engine:
-    build: 
-      context: ./engine
-      dockerfile: Dockerfile
-    image: ai-scene-engine:latest
+    image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-engine:${IMAGE_TAG:-latest}
     container_name: ai-scene-engine
     environment:
       # Redis Connection (Same as backend)
@@ -88,13 +82,12 @@ services:
       - coolify
 
   ai-scene-frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
-        - VITE_API_KEY=${VITE_API_KEY}
-    image: ai-scene-frontend:latest
+    image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-frontend:${IMAGE_TAG:-latest}
+    environment:
+      # Frontend build args are baked into the image during GitHub Actions build
+      # These env vars are for runtime reference only (not used by Nginx)
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL}
+      - VITE_API_KEY=${VITE_API_KEY}
     container_name: ai-scene-frontend
     ports:
       - "3000:80"
