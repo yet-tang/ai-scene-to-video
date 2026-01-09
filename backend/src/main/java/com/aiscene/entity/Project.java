@@ -47,6 +47,9 @@ public class Project {
     @Column(name = "audio_url")
     private String audioUrl;
 
+    @Column(name = "bgm_url")
+    private String bgmUrl;
+
     @Column(name = "final_video_url")
     private String finalVideoUrl;
 

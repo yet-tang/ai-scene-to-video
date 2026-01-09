@@ -4,6 +4,7 @@ from script_gen import ScriptGenerator
 from audio_gen import AudioGenerator
 from video_render import VideoRenderer
 from aliyun_client import AliyunClient
+from sfx_library import SFXLibrary
 from config import Config
 import json
 import logging
@@ -640,8 +641,9 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
 detector = SceneDetector()
 script_gen = ScriptGenerator()
 audio_gen = AudioGenerator()
-video_render = VideoRenderer()
 aliyun_client = AliyunClient()
+sfx_library = SFXLibrary()  # Initialize SFX library
+video_render = VideoRenderer(aliyun_client=aliyun_client, sfx_library=sfx_library)  # Inject dependencies
 
 @celery_app.task(bind=True, max_retries=3)
 def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
@@ -987,12 +989,15 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
         # 1. Fetch Script
         conn = psycopg2.connect(Config.DB_DSN)
         script_content = ""
+        house_info = {}
         try:
             with conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT script_content FROM projects WHERE id = %s", (project_id,))
+                    cursor.execute("SELECT script_content, title, description FROM projects WHERE id = %s", (project_id,))
                     row = cursor.fetchone()
-                    if row: script_content = row[0]
+                    if row:
+                        script_content = row[0]
+                        house_info = {'title': row[1] or '', 'description': row[2] or ''}
         finally:
             conn.close()
 
@@ -1016,7 +1021,15 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
             temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
             temp_video.close()
             
-            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name, bgm_path=bgm_path)
+            # Pass script_segments for subtitle rendering (P0 Feature)
+            output_path = video_render.render_video(
+                timeline_assets_db, 
+                audio_map, 
+                temp_video.name, 
+                bgm_path=bgm_path,
+                script_segments=segments,  # Enable subtitle generation
+                house_info=house_info  # Enable intelligent AI enhancement
+            )
 
             # 4. Upload
             file_name = f"rendered_{project_id}.mp4"
@@ -1068,6 +1081,19 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
         
         segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
         
+        # Fetch house info for intelligent AI enhancement
+        conn = psycopg2.connect(Config.DB_DSN)
+        house_info = {}
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT title, description FROM projects WHERE id = %s", (project_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        house_info = {'title': row[0] or '', 'description': row[1] or ''}
+        finally:
+            conn.close()
+        
         # Download BGM
         bgm_path = None
         if bgm_url:
@@ -1116,7 +1142,15 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
             temp_video = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
             temp_video.close()
             
-            output_path = video_render.render_video(timeline_assets_db, audio_map, temp_video.name, bgm_path=bgm_path)
+            # Pass script_segments for subtitle rendering (P0 Feature)
+            output_path = video_render.render_video(
+                timeline_assets_db, 
+                audio_map, 
+                temp_video.name, 
+                bgm_path=bgm_path,
+                script_segments=segments,  # Enable subtitle generation
+                house_info=house_info  # Enable intelligent AI enhancement
+            )
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")
             

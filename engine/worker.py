@@ -132,5 +132,13 @@ def setup_task_loggers(logger, *args, **kwargs):
         handler.addFilter(_request_id_filter)
         handler.setFormatter(JsonFormatter("ai-scene-engine"))
 
+# Validate configuration on startup
+try:
+    from config import Config
+    Config.validate()
+except Exception as e:
+    import logging
+    logging.error(f"Configuration validation failed: {e}")
+
 if __name__ == '__main__':
     celery_app.start()

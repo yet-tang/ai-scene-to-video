@@ -1,0 +1,53 @@
+# SFX Library Setup Guide
+
+This directory should contain sound effect files for enhancing real estate videos.
+
+## Directory Structure
+
+```
+sfx_library/
+├── birds.mp3              # Birds chirping sound
+├── wind.mp3               # Soft wind/breeze
+├── door_open.mp3          # Door opening sound
+├── door_close.mp3         # Door closing sound
+├── footsteps.mp3          # General footsteps
+├── footsteps_wood.mp3     # Footsteps on wooden floor
+├── window.mp3             # Window opening sound
+├── jazz_light.mp3         # Light jazz background music
+├── guitar_ambient.mp3     # Ambient acoustic guitar
+├── water.mp3              # Water flowing sound
+├── whoosh.mp3             # Transition whoosh effect
+└── transition.mp3         # Subtle transition sound
+```
+
+## File Requirements
+
+- **Format**: MP3, WAV, or OGG
+- **Duration**: 2-10 seconds (will be trimmed if longer)
+- **Quality**: 48kHz sample rate recommended
+- **Volume**: Original volume will be reduced to 30% in mix
+
+## Free Sound Effect Resources
+
+1. **Freesound.org** - https://freesound.org
+2. **Zapsplat** - https://www.zapsplat.com
+3. **BBC Sound Effects** - https://sound-effects.bbcrewind.co.uk
+4. **Pixabay Audio** - https://pixabay.com/sound-effects
+
+## Usage in Script
+
+The AI script generator can output `audio_cue` fields like:
+- "Birds chirping"
+- "Soft wind"
+- "Door open"
+- "Footsteps on wood"
+
+These will be automatically mapped to the corresponding SFX files.
+
+## Enable SFX in Configuration
+
+Set in `.env`:
+```bash
+SFX_ENABLED=true
+SFX_LIBRARY_PATH=/path/to/sfx_library
+```

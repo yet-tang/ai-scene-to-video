@@ -1,4 +1,4 @@
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip
 from config import Config
 import boto3
 import json
@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 class VideoRenderer:
-    def __init__(self):
+    def __init__(self, aliyun_client=None, sfx_library=None):
         self._s3_client = boto3.client(
             "s3",
             endpoint_url=Config.S3_STORAGE_ENDPOINT,
@@ -22,6 +22,10 @@ class VideoRenderer:
             aws_secret_access_key=Config.S3_STORAGE_SECRET_KEY,
             region_name=Config.S3_STORAGE_REGION,
         )
+        # Inject AliyunClient for AI enhancement
+        self._aliyun_client = aliyun_client
+        # Inject SFX Library for sound effects
+        self._sfx_library = sfx_library
 
     def _url_host(self, url: str) -> str:
         try:
@@ -230,11 +234,342 @@ class VideoRenderer:
         except Exception:
             return clip
 
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None) -> str:
+    def _generate_subtitle_clips(self, script_segments: list, video_size: tuple) -> list:
+        """
+        Generate subtitle TextClip objects from script segments.
+        Supports multiple subtitle styles based on configuration.
+        Returns list of positioned TextClip ready for composition.
+        """
+        subtitle_clips = []
+        current_time = 0.0
+        
+        # Define subtitle styles
+        styles = {
+            "default": {
+                "fontsize": 48,
+                "color": "white",
+                "stroke_color": "black",
+                "stroke_width": 2,
+                "position": 0.75
+            },
+            "elegant": {
+                "fontsize": 52,
+                "color": "#F5F5DC",  # Beige white
+                "stroke_color": "#8B7355",  # Brown shadow
+                "stroke_width": 1.5,
+                "position": 0.80
+            },
+            "bold": {
+                "fontsize": 56,
+                "color": "white",
+                "stroke_color": "#D4AF37",  # Gold outline
+                "stroke_width": 3,
+                "position": 0.70
+            }
+        }
+        
+        # Get style from config or use default
+        style_name = getattr(Config, 'SUBTITLE_STYLE', 'default')
+        style = styles.get(style_name, styles['default'])
+        
+        for idx, seg in enumerate(script_segments):
+            text = seg.get('text', '').strip()
+            duration = float(seg.get('duration', 0.0))
+            
+            if not text or duration <= 0:
+                current_time += duration
+                continue
+            
+            # Extract key phrases for subtitle
+            import re
+            sentences = re.split(r'[。！？]', text)
+            key_phrase = sentences[0].strip() if sentences else text
+            
+            # Limit subtitle length for readability
+            if len(key_phrase) > 15:
+                key_phrase = key_phrase[:15] + '...'
+            
+            # Special handling for first and last segments (title style)
+            is_title = (idx == 0) or (idx == len(script_segments) - 1)
+            
+            try:
+                # Create text clip
+                txt_clip = TextClip(
+                    key_phrase,
+                    fontsize=style['fontsize'] + (8 if is_title else 0),
+                    color=style['color'],
+                    font=Config.SUBTITLE_FONT,
+                    stroke_color=style['stroke_color'],
+                    stroke_width=style['stroke_width'],
+                    method='caption',
+                    size=(video_size[0] * 0.8, None),
+                    align='center'
+                )
+                
+                # Position subtitle
+                y_position = style['position'] if not is_title else 0.5  # Center for titles
+                positioned = txt_clip.set_position(('center', y_position), relative=True)
+                
+                # Timing: show for appropriate duration
+                show_duration = min(3.0 if is_title else 2.5, duration)
+                positioned = positioned.set_start(current_time).set_duration(show_duration)
+                
+                # Enhanced transitions
+                if is_title:
+                    # Title: slower fade with scale effect
+                    positioned = positioned.crossfadein(0.5).crossfadeout(0.5)
+                else:
+                    # Regular: quick fade
+                    positioned = positioned.crossfadein(0.3).crossfadeout(0.3)
+                
+                subtitle_clips.append(positioned)
+                
+            except Exception as e:
+                logger.warning(f"Failed to create subtitle for segment {idx}: {e}")
+            
+            current_time += duration
+        
+        return subtitle_clips
+
+    def _should_enhance_asset(self, asset: dict, index: int, total_count: int) -> bool:
+        """
+        Smart strategy to determine if an asset should use AI enhancement.
+        Based on:
+        - First clip (cover/thumbnail)
+        - Assets with visual_prompt
+        - Key moments (configurable)
+        """
+        if not Config.VISUAL_ENHANCEMENT_ENABLED:
+            return False
+        
+        strategy = Config.VISUAL_ENHANCEMENT_STRATEGY
+        
+        if strategy == "all":
+            return True
+        elif strategy == "none":
+            return False
+        elif strategy == "smart":
+            # Enhance first clip (cover)
+            if index == 0:
+                return True
+            
+            # Enhance if visual_prompt is explicitly provided
+            visual_prompt = asset.get('visual_prompt', '').strip()
+            if visual_prompt:
+                return True
+            
+            # Enhance marked highlight clips
+            if asset.get('is_highlight', False):
+                return True
+            
+            return False
+        
+        return False
+
+    def _enhance_video_with_ai(self, video_url: str, prompt: str) -> str:
+        """
+        Apply Aliyun Video Repainting to enhance visual style.
+        Returns URL of enhanced video.
+        """
+        if not self._aliyun_client:
+            logger.warning("AliyunClient not available, skipping AI enhancement")
+            return video_url
+        
+        try:
+            logger.info(f"Applying AI visual enhancement with prompt: {prompt[:50]}...")
+            enhanced_url = self._aliyun_client.video_repainting(
+                video_url, 
+                prompt, 
+                control_condition="depth"  # Preserve structure
+            )
+            logger.info(f"AI enhancement completed: {enhanced_url}")
+            return enhanced_url
+        except Exception as e:
+            logger.error(f"AI enhancement failed, using original: {e}")
+            return video_url
+
+    def _build_enhancement_prompt(self, asset: dict, house_info: dict = None) -> str:
+        """
+        Build intelligent enhancement prompt based on asset context and house features.
+        房源特征感知：根据房源类型、场景和特点动态生成最优 Prompt。
+        """
+        # Base prompt for warm life style
+        base_prompt = "Warm sunshine, cinematic lighting, cozy atmosphere, 4k, high resolution"
+        
+        # Get scene label and custom visual prompt
+        scene = asset.get('scene_label', '').lower()
+        custom_prompt = asset.get('visual_prompt', '').strip()
+        
+        if custom_prompt:
+            # If AI script already provided visual_prompt, use it directly
+            return custom_prompt
+        
+        # Scene-specific enhancements
+        scene_enhancements = {
+            '客厅': 'spacious living room, natural light streaming through large windows, elegant furniture',
+            'living': 'spacious living room, natural light streaming through large windows, elegant furniture',
+            '卧室': 'serene bedroom, soft bedding, peaceful atmosphere, warm tones',
+            'bedroom': 'serene bedroom, soft bedding, peaceful atmosphere, warm tones',
+            '厨房': 'modern kitchen, clean white surfaces, bright and inviting, organized space',
+            'kitchen': 'modern kitchen, clean white surfaces, bright and inviting, organized space',
+            '阳台': 'balcony with city view, plants, relaxing outdoor space, golden hour',
+            'balcony': 'balcony with city view, plants, relaxing outdoor space, golden hour',
+            '餐厅': 'elegant dining area, warm lighting, family gathering space',
+            'dining': 'elegant dining area, warm lighting, family gathering space',
+        }
+        
+        # House feature keywords to enhance specific aspects
+        feature_keywords = {
+            '江景': 'river view, waterfront, panoramic scenery',
+            '湖景': 'lake view, tranquil water scenery',
+            '海景': 'ocean view, coastal atmosphere',
+            '山景': 'mountain view, natural landscape',
+            '学区': 'family-friendly, warm educational atmosphere',
+            '豪华': 'luxury finishes, high-end materials, sophisticated design',
+            '精装': 'modern renovation, tasteful decoration',
+            '采光': 'abundant natural light, bright and airy',
+            '通透': 'open layout, well-ventilated, spacious feeling',
+        }
+        
+        # Build enhanced prompt
+        prompt_parts = [base_prompt]
+        
+        # Add scene-specific enhancement
+        for key, enhancement in scene_enhancements.items():
+            if key in scene:
+                prompt_parts.append(enhancement)
+                break
+        
+        # Add house feature enhancements
+        if house_info:
+            title = house_info.get('title', '')
+            description = house_info.get('description', '')
+            combined_text = f"{title} {description}".lower()
+            
+            for keyword, enhancement in feature_keywords.items():
+                if keyword in combined_text:
+                    prompt_parts.append(enhancement)
+                    break  # Only add one feature enhancement to avoid over-prompting
+        
+        return ', '.join(prompt_parts)
+
+    def _apply_auto_ducking(self, tts_audio, bgm_audio, tts_segments: list) -> 'AudioClip':
+        """
+        Apply auto-ducking: reduce BGM volume when TTS is speaking.
+        
+        Args:
+            tts_audio: The TTS audio track (already composite)
+            bgm_audio: The background music track
+            tts_segments: List of {'start': float, 'duration': float} for TTS segments
+        
+        Returns:
+            Modified BGM audio with ducking applied
+        """
+        if not Config.AUTO_DUCKING_ENABLED or not tts_segments:
+            return bgm_audio
+        
+        try:
+            from moviepy.audio.AudioClip import CompositeAudioClip
+            import numpy as np
+            
+            # Build ducking envelope
+            # During TTS: reduce to ducking_level (e.g. 30%)
+            # Outside TTS: normal BGM_VOLUME (e.g. 15%)
+            
+            total_duration = bgm_audio.duration
+            ducking_level = Config.BGM_DUCKING_LEVEL  # e.g. 0.3
+            normal_level = 1.0  # BGM is already at BGM_VOLUME, so this is relative
+            
+            # Create volume envelope function
+            def volume_envelope(t):
+                # Check if current time is within any TTS segment
+                for seg in tts_segments:
+                    start = seg.get('start', 0.0)
+                    duration = seg.get('duration', 0.0)
+                    end = start + duration
+                    
+                    # Add fade transition zones (0.2s)
+                    fade_time = 0.2
+                    
+                    if start <= t <= end:
+                        # Within TTS segment
+                        if t < start + fade_time:
+                            # Fade down
+                            ratio = (t - start) / fade_time
+                            return normal_level - (normal_level - ducking_level) * ratio
+                        elif t > end - fade_time:
+                            # Fade up
+                            ratio = (end - t) / fade_time
+                            return ducking_level + (normal_level - ducking_level) * (1 - ratio)
+                        else:
+                            # Full duck
+                            return ducking_level
+                
+                return normal_level
+            
+            # Apply volume envelope
+            ducked_bgm = bgm_audio.fl(lambda gf, t: gf(t) * volume_envelope(t), apply_to=['audio'])
+            
+            logger.info(f"Auto-ducking applied to BGM with {len(tts_segments)} TTS segments")
+            return ducked_bgm
+            
+        except Exception as e:
+            logger.warning(f"Auto-ducking failed, using original BGM: {e}")
+            return bgm_audio
+
+    def _generate_sfx_tracks(self, script_segments: list, video_duration: float) -> list:
+        """
+        Generate sound effect audio tracks based on audio_cue in script segments.
+        Returns list of AudioFileClip objects positioned at correct timestamps.
+        """
+        if not Config.SFX_ENABLED or not self._sfx_library:
+            return []
+        
+        if not self._sfx_library.is_available():
+            logger.warning("SFX library not available, skipping sound effects")
+            return []
+        
+        sfx_clips = []
+        current_time = 0.0
+        
+        for seg in script_segments:
+            audio_cue = seg.get('audio_cue', '').strip()
+            duration = float(seg.get('duration', 0.0))
+            
+            if audio_cue:
+                sfx_path = self._sfx_library.get_sfx_path(audio_cue)
+                
+                if sfx_path:
+                    try:
+                        sfx_clip = AudioFileClip(sfx_path)
+                        
+                        # Position at start of segment
+                        sfx_clip = sfx_clip.set_start(current_time)
+                        
+                        # Reduce volume to blend naturally (30% of original)
+                        sfx_clip = sfx_clip.volumex(0.3)
+                        
+                        # Trim if SFX is longer than segment
+                        if sfx_clip.duration > duration:
+                            sfx_clip = sfx_clip.subclip(0, duration)
+                        
+                        sfx_clips.append(sfx_clip)
+                        logger.info(f"Added SFX '{audio_cue}' at {current_time:.1f}s")
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to load SFX '{audio_cue}': {e}")
+            
+            current_time += duration
+        
+        return sfx_clips
+
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
         bgm_path: optional path to background music file
+        script_segments: optional list of script segments for subtitle generation
+        house_info: optional house information for intelligent AI enhancement
         """
         final_clips = []
         temp_files_to_clean = []
@@ -245,13 +580,26 @@ class VideoRenderer:
 
         try:
             # 1. Process each asset
-            for asset in timeline_assets:
+            for idx, asset in enumerate(timeline_assets):
                 url = asset.get('oss_url')
                 asset_id = asset.get('id')
                 asset_duration = float(asset.get("duration") or 0.0)
+                visual_prompt = asset.get('visual_prompt', '').strip()
                 
-                # Check for visual prompt (simulated logic for now, or just apply warm filter to all)
-                # Ideally we check asset.get('visual_prompt')
+                # --- AI Visual Enhancement (P0 Feature) ---
+                if self._should_enhance_asset(asset, idx, len(timeline_assets)):
+                    # Build intelligent prompt based on scene and house features
+                    enhance_prompt = self._build_enhancement_prompt(asset, house_info)
+                    
+                    try:
+                        enhanced_url = self._enhance_video_with_ai(url, enhance_prompt)
+                        # Replace URL with enhanced version
+                        asset = {**asset, 'oss_url': enhanced_url}
+                        url = enhanced_url
+                        logger.info(f"Asset {asset_id} enhanced with AI (index={idx}, prompt={enhance_prompt[:50]}...)")
+                    except Exception as e:
+                        logger.warning(f"AI enhancement failed for asset {asset_id}, using original: {e}")
+                # ------------------------------------------
                 
                 if not url and not asset.get("storage_key"):
                     continue
@@ -264,14 +612,24 @@ class VideoRenderer:
                     clip = self._open_video_clip(local_video_path)
                     # Apply Warm Filter (Global for "Warm Life Style")
                     clip = self._apply_warm_filter(clip)
-                except Exception:
+                except Exception as video_error:
+                    logger.error(
+                        f"Failed to open video clip for asset {asset_id}",
+                        extra={
+                            "event": "video.clip.open_failed",
+                            "asset_id": asset_id,
+                            "error_type": type(video_error).__name__,
+                            "error_message": str(video_error)[:200]
+                        }
+                    )
                     clip = None
                     
                 # Basic resize to 720p height
                 # Note: If mixed aspect ratios, this might be weird. 
                 # Assuming all are vertical or we just fit height.
-                if clip is not None and clip.h != 720:
-                    clip = clip.resize(height=720)
+                target_height = min(720, Config.MAX_VIDEO_RESOLUTION)
+                if clip is not None and clip.h != target_height:
+                    clip = clip.resize(height=target_height)
                 if clip is not None and output_size is None:
                     try:
                         output_size = tuple(clip.size)
@@ -387,12 +745,57 @@ class VideoRenderer:
             # 4. Concatenate All
             final_video = concatenate_videoclips(final_clips, method="compose")
 
-            # --- Audio Mixing (TTS + BGM) ---
+            # --- Subtitle Integration (P0 Feature) ---
+            if script_segments and Config.SUBTITLE_ENABLED:
+                try:
+                    logger.info(
+                        "Starting subtitle generation",
+                        extra={
+                            "event": "subtitle.generation.start",
+                            "segment_count": len(script_segments),
+                            "video_duration": float(final_video.duration)
+                        }
+                    )
+                    video_size = tuple(final_video.size) if hasattr(final_video, 'size') else (1280, 720)
+                    subtitle_clips = self._generate_subtitle_clips(script_segments, video_size)
+                    
+                    if subtitle_clips:
+                        logger.info(
+                            f"Adding {len(subtitle_clips)} subtitle clips to video",
+                            extra={
+                                "event": "subtitle.integration.success",
+                                "subtitle_count": len(subtitle_clips)
+                            }
+                        )
+                        final_video = CompositeVideoClip([final_video] + subtitle_clips)
+                except Exception as e:
+                    logger.warning(
+                        f"Subtitle rendering failed, continuing without subtitles",
+                        extra={
+                            "event": "subtitle.rendering.failed",
+                            "error_type": type(e).__name__,
+                            "error_message": str(e)[:200]
+                        }
+                    )
+            # ------------------------------------------
+
+            # --- Audio Mixing (TTS + BGM + SFX) ---
             from moviepy.editor import AudioFileClip, CompositeAudioClip
             
             audio_tracks = []
             if final_video.audio:
                 audio_tracks.append(final_video.audio)
+            
+            # --- SFX Integration (P1 Feature) ---
+            if Config.SFX_ENABLED and script_segments:
+                try:
+                    sfx_clips = self._generate_sfx_tracks(script_segments, final_video.duration)
+                    if sfx_clips:
+                        logger.info(f"Adding {len(sfx_clips)} sound effects to audio mix")
+                        audio_tracks.extend(sfx_clips)
+                except Exception as e:
+                    logger.warning(f"SFX generation failed: {e}")
+            # ------------------------------------
             
             if bgm_path and os.path.exists(bgm_path):
                 try:
@@ -403,8 +806,23 @@ class VideoRenderer:
                     else:
                         bgm_clip = bgm_clip.subclip(0, final_video.duration)
                     
-                    # Volume 15%
-                    bgm_clip = bgm_clip.volumex(0.15)
+                    # Volume control
+                    bgm_clip = bgm_clip.volumex(Config.BGM_VOLUME)
+                    
+                    # --- Auto-ducking (P1 Feature) ---
+                    if Config.AUTO_DUCKING_ENABLED and script_segments:
+                        # Build TTS segment timing info
+                        tts_timing = []
+                        current_time = 0.0
+                        for seg in script_segments:
+                            duration = float(seg.get('duration', 0.0))
+                            if seg.get('text', '').strip():  # Only segments with text
+                                tts_timing.append({'start': current_time, 'duration': duration})
+                            current_time += duration
+                        
+                        bgm_clip = self._apply_auto_ducking(final_video.audio, bgm_clip, tts_timing)
+                    # ------------------------------------
+                    
                     audio_tracks.append(bgm_clip)
                 except Exception as e:
                     logger.warning(f"Failed to load BGM: {e}")
@@ -421,7 +839,7 @@ class VideoRenderer:
                 audio_codec='aac', 
                 fps=24,
                 preset='veryfast',
-                threads=4,
+                threads=Config.RENDER_THREADS,  # Configurable thread count
                 logger=None 
             )
             if attached_audio_count <= 0:

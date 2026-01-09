@@ -40,6 +40,7 @@ public class ProjectService {
     private final TaskQueueService taskQueueService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final BgmConfig bgmConfig;
 
     @Value("${app.local-asset-base-url:http://ai-scene-backend:8090/public}")
     private String localAssetBaseUrl;
@@ -226,17 +227,26 @@ public class ProjectService {
             throw new IllegalStateException("Project is not ready to render");
         }
         
-        taskQueueService.submitRenderPipelineTask(projectId, scriptContent, timelineAssets);
+        // Pass BGM URL to rendering task
+        String bgmUrl = project.getBgmUrl();
+        taskQueueService.submitRenderPipelineTask(projectId, scriptContent, timelineAssets, bgmUrl);
     }
 
     @Transactional
     public Project createProject(CreateProjectRequest request) {
         JsonNode houseInfoJson = objectMapper.valueToTree(request.getHouseInfo());
 
+        // Auto-select a random BGM from built-in list
+        String bgmUrl = null;
+        if (bgmConfig.isAutoSelect() && bgmConfig.hasBuiltinBgm()) {
+            bgmUrl = bgmConfig.getRandomBgmUrl();
+        }
+
         Project project = Project.builder()
                 .userId(request.getUserId())
                 .title(request.getTitle())
                 .houseInfo(houseInfoJson)
+                .bgmUrl(bgmUrl)
                 .status(ProjectStatus.DRAFT)
                 .build();
 

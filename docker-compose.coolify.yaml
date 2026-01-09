@@ -24,6 +24,8 @@ services:
       - S3_STORAGE_PUBLIC_URL=${S3_STORAGE_PUBLIC_URL}
       - APP_DEV_RESET_ENABLED=${APP_DEV_RESET_ENABLED}
       - APP_UPLOAD_ALLOWED_CONTENT_TYPES=${APP_UPLOAD_ALLOWED_CONTENT_TYPES}
+      # Built-in BGM Configuration
+      - APP_BGM_AUTO_SELECT=${APP_BGM_AUTO_SELECT:-true}
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
@@ -50,6 +52,28 @@ services:
       - SMART_SPLIT_ENABLED=true
       - SMART_SPLIT_STRATEGY=hybrid
       - SMART_SPLIT_MIN_DURATION_SEC=10
+      # "温情生活风" Enhancement Features
+      # Subtitle Configuration
+      - SUBTITLE_ENABLED=${SUBTITLE_ENABLED:-true}
+      - SUBTITLE_FONT=${SUBTITLE_FONT:-Arial-Bold}
+      - SUBTITLE_FONT_SIZE=${SUBTITLE_FONT_SIZE:-48}
+      - SUBTITLE_POSITION=${SUBTITLE_POSITION:-0.75}
+      - SUBTITLE_STYLE=${SUBTITLE_STYLE:-default}
+      # Visual Enhancement (Aliyun Wanxiang)
+      - VISUAL_ENHANCEMENT_ENABLED=${VISUAL_ENHANCEMENT_ENABLED:-false}
+      - VISUAL_ENHANCEMENT_STRATEGY=${VISUAL_ENHANCEMENT_STRATEGY:-smart}
+      - VISUAL_ENHANCEMENT_MODEL=${VISUAL_ENHANCEMENT_MODEL:-wanx2.1-vace-plus}
+      # Sound Effects (SFX)
+      - SFX_ENABLED=${SFX_ENABLED:-false}
+      - SFX_LIBRARY_PATH=${SFX_LIBRARY_PATH:-/app/sfx_library}
+      # Audio Mixing & BGM
+      - AUTO_DUCKING_ENABLED=${AUTO_DUCKING_ENABLED:-false}
+      - BGM_VOLUME=${BGM_VOLUME:-0.15}
+      - BGM_DUCKING_LEVEL=${BGM_DUCKING_LEVEL:-0.3}
+      # Performance Optimization
+      - RENDER_THREADS=${RENDER_THREADS:-4}
+      - ENABLE_CLIP_CACHE=${ENABLE_CLIP_CACHE:-false}
+      - MAX_VIDEO_RESOLUTION=${MAX_VIDEO_RESOLUTION:-1080}
       # S3 Configuration (For uploading final video)
       - S3_STORAGE_REGION=${S3_STORAGE_REGION}
       - S3_STORAGE_ENDPOINT=${S3_STORAGE_ENDPOINT}
