@@ -92,6 +92,86 @@ class ProjectServiceTest {
     }
 
     @Test
+    void createProject_autoSelectsBgmWhenEnabled() {
+        CreateProjectRequest request = new CreateProjectRequest();
+        request.setUserId(123L);
+        request.setTitle("t");
+        Map<String, Object> houseInfo = new HashMap<>();
+        houseInfo.put("room", 2);
+        request.setHouseInfo(houseInfo);
+
+        var jsonNode = new ObjectMapper().createObjectNode().put("room", 2);
+        when(objectMapper.valueToTree(houseInfo)).thenReturn(jsonNode);
+        when(bgmConfig.isAutoSelect()).thenReturn(true);
+        when(bgmConfig.hasBuiltinBgm()).thenReturn(true);
+        when(bgmConfig.getRandomBgmUrl()).thenReturn("https://example.com/bgm1.mp3");
+
+        Project saved = Project.builder().id(UUID.randomUUID()).build();
+        when(projectRepository.save(any(Project.class))).thenReturn(saved);
+
+        projectService.createProject(request);
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectRepository).save(captor.capture());
+        Project toSave = captor.getValue();
+        assertThat(toSave.getBgmUrl()).isEqualTo("https://example.com/bgm1.mp3");
+        verify(bgmConfig).isAutoSelect();
+        verify(bgmConfig).hasBuiltinBgm();
+        verify(bgmConfig).getRandomBgmUrl();
+    }
+
+    @Test
+    void createProject_noBgmWhenAutoSelectDisabled() {
+        CreateProjectRequest request = new CreateProjectRequest();
+        request.setUserId(123L);
+        request.setTitle("t");
+        request.setHouseInfo(new HashMap<>());
+
+        var jsonNode = new ObjectMapper().createObjectNode();
+        when(objectMapper.valueToTree(any())).thenReturn(jsonNode);
+        when(bgmConfig.isAutoSelect()).thenReturn(false);
+
+        Project saved = Project.builder().id(UUID.randomUUID()).build();
+        when(projectRepository.save(any(Project.class))).thenReturn(saved);
+
+        projectService.createProject(request);
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectRepository).save(captor.capture());
+        Project toSave = captor.getValue();
+        assertThat(toSave.getBgmUrl()).isNull();
+        verify(bgmConfig).isAutoSelect();
+        verify(bgmConfig, never()).hasBuiltinBgm();
+        verify(bgmConfig, never()).getRandomBgmUrl();
+    }
+
+    @Test
+    void createProject_noBgmWhenNoBuiltinList() {
+        CreateProjectRequest request = new CreateProjectRequest();
+        request.setUserId(123L);
+        request.setTitle("t");
+        request.setHouseInfo(new HashMap<>());
+
+        var jsonNode = new ObjectMapper().createObjectNode();
+        when(objectMapper.valueToTree(any())).thenReturn(jsonNode);
+        when(bgmConfig.isAutoSelect()).thenReturn(true);
+        when(bgmConfig.hasBuiltinBgm()).thenReturn(false);
+
+        Project saved = Project.builder().id(UUID.randomUUID()).build();
+        when(projectRepository.save(any(Project.class))).thenReturn(saved);
+
+        projectService.createProject(request);
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectRepository).save(captor.capture());
+        Project toSave = captor.getValue();
+        assertThat(toSave.getBgmUrl()).isNull();
+        verify(bgmConfig).isAutoSelect();
+        verify(bgmConfig).hasBuiltinBgm();
+        verify(bgmConfig, never()).getRandomBgmUrl();
+    }
+
+    @Test
     void getSmartTimeline_sortsByScenePriorityWhenAnalyzed() {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).title("p").build();
