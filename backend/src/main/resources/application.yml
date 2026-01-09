@@ -68,6 +68,7 @@ app:
     auto-select: ${APP_BGM_AUTO_SELECT:true}
     builtin-urls:
       # Example URLs - Replace with your actual S3-hosted BGM files
-      # - https://your-cdn.com/bgm/warm-piano-01.mp3
-      # - https://your-cdn.com/bgm/cozy-acoustic-02.mp3
-      # - https://your-cdn.com/bgm/modern-minimal-03.mp3
+      - https://media.tnight.xyz/publics/bgm-warm-piano-01.mp3
+      - https://media.tnight.xyz/publics/bgm-warm-piano-02.mp3
+      - https://media.tnight.xyz/publics/bgm-warm-piano-03.mp3
+      - https://media.tnight.xyz/publics/bgm-warm-piano-04.mp3
