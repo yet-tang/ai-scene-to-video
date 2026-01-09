@@ -6,6 +6,7 @@ import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
+import com.aiscene.config.BgmConfig;
 import com.aiscene.repository.AssetRepository;
 import com.aiscene.repository.ProjectRepository;
 import com.fasterxml.jackson.databind.JsonNode;
