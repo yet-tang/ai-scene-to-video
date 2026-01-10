@@ -69,3 +69,7 @@ docker-compose.override.yml
 logs/
 *.log
 
+job-logs.txt
+.gitignore
+deployment*.txt
+Explore-*.json
