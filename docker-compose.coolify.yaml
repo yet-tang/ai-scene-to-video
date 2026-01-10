@@ -68,6 +68,8 @@ services:
       - RENDER_THREADS=${RENDER_THREADS:-4}
       - ENABLE_CLIP_CACHE=${ENABLE_CLIP_CACHE:-false}
       - MAX_VIDEO_RESOLUTION=${MAX_VIDEO_RESOLUTION:-1080}
+      # Celery Worker Concurrency (for 4GB VPS, recommend 2)
+      - CELERY_WORKER_CONCURRENCY=${CELERY_WORKER_CONCURRENCY:-2}
       # S3 Configuration (For uploading final video)
       - S3_STORAGE_REGION=${S3_STORAGE_REGION}
       - S3_STORAGE_ENDPOINT=${S3_STORAGE_ENDPOINT}

@@ -32,4 +32,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Start Celery Worker
-CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]
+# Concurrency can be controlled via CELERY_WORKER_CONCURRENCY env var (default: 2 for 4GB VPS)
+# Use shell form to allow environment variable expansion
+CMD celery -A worker.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
