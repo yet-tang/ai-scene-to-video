@@ -67,6 +67,12 @@ class Config:
 
     # Subtitle Style (Advanced)
     SUBTITLE_STYLE = os.getenv("SUBTITLE_STYLE", "default")  # Options: default, elegant, bold
+    
+    # Intro/Outro Card Configuration
+    INTRO_ENABLED = os.getenv("INTRO_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    OUTRO_ENABLED = os.getenv("OUTRO_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    INTRO_DURATION = float(os.getenv("INTRO_DURATION", "3.0"))  # Seconds
+    OUTRO_DURATION = float(os.getenv("OUTRO_DURATION", "3.0"))  # Seconds
 
     # Performance Optimization
     RENDER_THREADS = int(os.getenv("RENDER_THREADS", "4"))  # FFmpeg rendering threads

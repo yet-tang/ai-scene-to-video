@@ -4,6 +4,7 @@ import boto3
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -12,6 +13,18 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+# Constants for intro/outro card generation
+INTRO_TITLE_MAX_LENGTH = 12  # Maximum characters for intro title
+SUBTITLE_MAX_LENGTH = 15  # Maximum characters for subtitle display
+TITLE_FONT_SIZE_RATIO = 12  # video_width // ratio = font size
+TAGLINE_FONT_SIZE_RATIO = 24
+CTA_FONT_SIZE_RATIO = 15
+CONTACT_FONT_SIZE_RATIO = 28
+DEFAULT_FALLBACK_TITLE = '温馨之家'
+DEFAULT_FALLBACK_TAGLINE = '用心感受，温暖生活'
+DEFAULT_FALLBACK_CTA = ('预约看房，开启美好生活', '期待您的到来')
+INTRO_BG_COLOR = (20, 20, 30)  # Dark blue-gray
 
 class VideoRenderer:
     def __init__(self, aliyun_client=None, sfx_library=None):
@@ -234,14 +247,301 @@ class VideoRenderer:
         except Exception:
             return clip
 
-    def _generate_subtitle_clips(self, script_segments: list, video_size: tuple) -> list:
+    def _get_combined_content_text(self, script_segments: list, house_info: dict) -> str:
+        """
+        Extract and combine all text content from script and house info.
+        
+        Args:
+            script_segments: List of script segments
+            house_info: Project metadata dict
+        
+        Returns:
+            Combined text string for keyword matching
+        """
+        all_text = ' '.join([seg.get('text', '') for seg in script_segments]) if script_segments else ''
+        description = house_info.get('description', '') if house_info else ''
+        return f"{all_text} {description}"
+
+    def _generate_intro_title_and_tagline(self, house_info: dict, script_segments: list) -> tuple[str, str]:
+        """
+        Generate intelligent title and tagline from video content.
+        
+        Strategy:
+        1. Title: Extract from house_info title or summarize from first script segment
+        2. Tagline: Extract emotional keywords from script content
+        
+        Args:
+            house_info: Project metadata
+            script_segments: Script segments for content analysis
+        
+        Returns:
+            (title, tagline) tuple
+        """
+        # Extract title
+        title = house_info.get('title', '').strip()
+        if not title and script_segments:
+            # Fallback: use first script segment as title
+            first_seg = script_segments[0].get('text', '').strip()
+            # Extract first sentence
+            sentences = re.split(r'[。！？]', first_seg)
+            title = sentences[0].strip() if sentences else DEFAULT_FALLBACK_TITLE
+            # Limit length
+            if len(title) > INTRO_TITLE_MAX_LENGTH:
+                title = title[:INTRO_TITLE_MAX_LENGTH] + '...'
+        
+        if not title:
+            title = DEFAULT_FALLBACK_TITLE
+        
+        # Generate tagline from script keywords
+        tagline = self._extract_tagline_from_script(script_segments, house_info)
+        
+        return title, tagline
+    
+    def _extract_tagline_from_script(self, script_segments: list, house_info: dict) -> str:
+        """
+        Extract emotional tagline from script content.
+        
+        Strategy:
+        - Analyze script keywords and scene descriptions
+        - Match with predefined emotional templates
+        - Generate contextual tagline
+        
+        Returns:
+            Tagline string (fallback: DEFAULT_FALLBACK_TAGLINE)
+        """
+        if not script_segments:
+            return DEFAULT_FALLBACK_TAGLINE
+        
+        # Get combined text for keyword matching
+        combined_text = self._get_combined_content_text(script_segments, house_info)
+        
+        # Keyword-based tagline mapping
+        tagline_patterns = [
+            # View-based
+            (['江景', '江边', '滨江'], '揽江景入怀，享都市繁华'),
+            (['湖景', '湖畔'], '临湖而居，静享岁月'),
+            (['海景', '海边'], '面朝大海，春暖花开'),
+            (['山景', '山居'], '隐于山林，静谧致远'),
+            
+            # Atmosphere-based
+            (['阳光', '采光', '明亮'], '阳光满屋，温暖相伴'),
+            (['温馨', '温暖', '舒适'], '用心感受，温暖生活'),
+            (['优雅', '精致', '高级'], '优雅生活，从此开始'),
+            (['现代', '简约', '时尚'], '现代美学，理想栖居'),
+            
+            # Lifestyle-based
+            (['家', '归家', '回家'], '家的温度，心的归属'),
+            (['生活', '日常', '岁月'], '细品生活，慢享时光'),
+            (['梦想', '理想', '憧憬'], '理想生活，触手可及'),
+        ]
+        
+        # Match keywords
+        for keywords, tagline in tagline_patterns:
+            for keyword in keywords:
+                if keyword in combined_text:
+                    return tagline
+        
+        # Default fallback
+        return DEFAULT_FALLBACK_TAGLINE
+    
+    def _create_intro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0) -> 'CompositeVideoClip':
+        """
+        Generate professional intro card with intelligent title and tagline.
+        
+        Args:
+            house_info: Project metadata (title, description)
+            script_segments: Script segments for content analysis
+            video_size: Video resolution tuple (width, height)
+            duration: Intro card duration in seconds
+        
+        Returns:
+            CompositeVideoClip with intro overlay
+        """
+        try:
+            # Background: Elegant gradient or solid color
+            bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
+            
+            overlay_clips = [bg_clip]
+            
+            # Generate intelligent title and tagline
+            title_text, tagline = self._generate_intro_title_and_tagline(house_info, script_segments)
+            
+            logger.info(f"Intro card: title='{title_text}', tagline='{tagline}'")
+            
+            # Main title
+            try:
+                title_clip = TextClip(
+                    title_text,
+                    fontsize=min(80, video_size[0] // TITLE_FONT_SIZE_RATIO),
+                    color='#F5F5DC',  # Beige white
+                    font=Config.SUBTITLE_FONT,
+                    stroke_color='#D4AF37',  # Gold outline
+                    stroke_width=2,
+                    method='caption',
+                    size=(video_size[0] * 0.8, None),
+                    align='center'
+                )
+                title_clip = title_clip.set_position(('center', 0.35), relative=True)
+                title_clip = title_clip.set_duration(duration)
+                title_clip = title_clip.crossfadein(0.8).crossfadeout(0.5)
+                overlay_clips.append(title_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create intro title: {e}")
+            
+            # Tagline / Subtitle
+            try:
+                tagline_clip = TextClip(
+                    tagline,
+                    fontsize=min(40, video_size[0] // TAGLINE_FONT_SIZE_RATIO),
+                    color='white',
+                    font=Config.SUBTITLE_FONT,
+                    method='caption',
+                    size=(video_size[0] * 0.7, None),
+                    align='center'
+                )
+                tagline_clip = tagline_clip.set_position(('center', 0.50), relative=True)
+                tagline_clip = tagline_clip.set_duration(duration)
+                tagline_clip = tagline_clip.crossfadein(1.0).crossfadeout(0.5)
+                overlay_clips.append(tagline_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create intro tagline: {e}")
+            
+            return CompositeVideoClip(overlay_clips)
+            
+        except Exception as e:
+            logger.error(f"Intro card generation failed: {e}")
+            # Fallback: simple black clip
+            return ColorClip(size=video_size, color=(0, 0, 0), duration=duration)
+    
+    def _generate_outro_cta(self, house_info: dict, script_segments: list) -> tuple[str, str]:
+        """
+        Generate intelligent CTA (Call-to-Action) for outro card.
+        
+        Strategy:
+        - Analyze content to determine appropriate CTA
+        - Match with property type and emotional tone
+        
+        Args:
+            house_info: Project metadata
+            script_segments: Script segments for content analysis
+        
+        Returns:
+            (main_cta, sub_cta) tuple
+        """
+        if not script_segments:
+            return DEFAULT_FALLBACK_CTA
+        
+        # Get combined text for keyword matching
+        combined_text = self._get_combined_content_text(script_segments, house_info)
+        
+        # CTA patterns based on content keywords
+        cta_patterns = [
+            # View-based
+            (['江景', '滨江'], ('与江景为伴，与美好相遇', '预约看房，感受不同')),
+            (['湖景', '湖畔'], ('享受宁静，拥抱美好', '预约咨询，开启新生活')),
+            (['海景'], ('面朝大海，心向自由', '立即预约，感受海景生活')),
+            
+            # Property type
+            (['豪宅', '别墅', '豪华'], ('尊享生活，即刻开启', '私人预约，尊享服务')),
+            (['大平层', '大屋'], ('空间自由，生活无限', '预约看房，体验大户型')),
+            (['学区', '教育'], ('为孩子，选择更好未来', '预约参观，了解学区优势')),
+            
+            # Lifestyle
+            (['温馨', '温暖'], ('回家，就是最好的时光', '预约看房，感受家的温度')),
+            (['现代', '时尚'], ('现代生活，从这里开始', '立即预约，一探究竟')),
+            (['优雅', '精致'], ('优雅品质，值得拥有', '预约咨询，品鉴美好')),
+        ]
+        
+        # Match keywords
+        for keywords, (main_cta, sub_cta) in cta_patterns:
+            for keyword in keywords:
+                if keyword in combined_text:
+                    return main_cta, sub_cta
+        
+        # Default fallback
+        return DEFAULT_FALLBACK_CTA
+    
+    def _create_outro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0) -> 'CompositeVideoClip':
+        """
+        Generate professional outro card with intelligent CTA.
+        
+        Args:
+            house_info: Project metadata
+            script_segments: Script segments for content analysis
+            video_size: Video resolution tuple
+            duration: Outro card duration in seconds
+        
+        Returns:
+            CompositeVideoClip with outro overlay
+        """
+        try:
+            # Background: Same elegant style as intro
+            bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
+            
+            overlay_clips = [bg_clip]
+            
+            # Generate intelligent CTA
+            cta_text, contact_text = self._generate_outro_cta(house_info, script_segments)
+            
+            logger.info(f"Outro card: cta='{cta_text}', contact='{contact_text}'")
+            
+            # CTA Text
+            try:
+                cta_clip = TextClip(
+                    cta_text,
+                    fontsize=min(64, video_size[0] // CTA_FONT_SIZE_RATIO),
+                    color='#F5F5DC',
+                    font=Config.SUBTITLE_FONT,
+                    stroke_color='#D4AF37',
+                    stroke_width=2,
+                    method='caption',
+                    size=(video_size[0] * 0.8, None),
+                    align='center'
+                )
+                cta_clip = cta_clip.set_position(('center', 0.35), relative=True)
+                cta_clip = cta_clip.set_duration(duration)
+                cta_clip = cta_clip.crossfadein(0.5).crossfadeout(0.8)
+                overlay_clips.append(cta_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create outro CTA: {e}")
+            
+            # Contact info or branding
+            try:
+                contact_clip = TextClip(
+                    contact_text,
+                    fontsize=min(36, video_size[0] // CONTACT_FONT_SIZE_RATIO),
+                    color='white',
+                    font=Config.SUBTITLE_FONT,
+                    method='caption',
+                    size=(video_size[0] * 0.7, None),
+                    align='center'
+                )
+                contact_clip = contact_clip.set_position(('center', 0.50), relative=True)
+                contact_clip = contact_clip.set_duration(duration)
+                contact_clip = contact_clip.crossfadein(0.7).crossfadeout(0.8)
+                overlay_clips.append(contact_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create outro contact: {e}")
+            
+            return CompositeVideoClip(overlay_clips)
+            
+        except Exception as e:
+            logger.error(f"Outro card generation failed: {e}")
+            return ColorClip(size=video_size, color=(0, 0, 0), duration=duration)
+
+    def _generate_subtitle_clips(self, script_segments: list, video_size: tuple[int, int], time_offset: float = 0.0) -> list:
         """
         Generate subtitle TextClip objects from script segments.
         Supports multiple subtitle styles based on configuration.
         Returns list of positioned TextClip ready for composition.
+        
+        Args:
+            script_segments: List of script segments with text and duration
+            video_size: Video resolution tuple (width, height)
+            time_offset: Time offset in seconds (e.g., intro duration)
         """
         subtitle_clips = []
-        current_time = 0.0
+        current_time = time_offset  # Start after intro if present
         
         # Define subtitle styles
         styles = {
@@ -281,22 +581,18 @@ class VideoRenderer:
                 continue
             
             # Extract key phrases for subtitle
-            import re
             sentences = re.split(r'[。！？]', text)
             key_phrase = sentences[0].strip() if sentences else text
             
             # Limit subtitle length for readability
-            if len(key_phrase) > 15:
-                key_phrase = key_phrase[:15] + '...'
-            
-            # Special handling for first and last segments (title style)
-            is_title = (idx == 0) or (idx == len(script_segments) - 1)
+            if len(key_phrase) > SUBTITLE_MAX_LENGTH:
+                key_phrase = key_phrase[:SUBTITLE_MAX_LENGTH] + '...'
             
             try:
                 # Create text clip
                 txt_clip = TextClip(
                     key_phrase,
-                    fontsize=style['fontsize'] + (8 if is_title else 0),
+                    fontsize=style['fontsize'],
                     color=style['color'],
                     font=Config.SUBTITLE_FONT,
                     stroke_color=style['stroke_color'],
@@ -307,20 +603,15 @@ class VideoRenderer:
                 )
                 
                 # Position subtitle
-                y_position = style['position'] if not is_title else 0.5  # Center for titles
+                y_position = style['position']
                 positioned = txt_clip.set_position(('center', y_position), relative=True)
                 
                 # Timing: show for appropriate duration
-                show_duration = min(3.0 if is_title else 2.5, duration)
+                show_duration = min(2.5, duration)
                 positioned = positioned.set_start(current_time).set_duration(show_duration)
                 
                 # Enhanced transitions
-                if is_title:
-                    # Title: slower fade with scale effect
-                    positioned = positioned.crossfadein(0.5).crossfadeout(0.5)
-                else:
-                    # Regular: quick fade
-                    positioned = positioned.crossfadein(0.3).crossfadeout(0.3)
+                positioned = positioned.crossfadein(0.3).crossfadeout(0.3)
                 
                 subtitle_clips.append(positioned)
                 
@@ -741,22 +1032,72 @@ class VideoRenderer:
             if not final_clips:
                 raise ValueError("No video clips to render")
 
-            # 4. Concatenate All
-            final_video = concatenate_videoclips(final_clips, method="compose")
+            # 4. Concatenate All Video Clips
+            main_video = concatenate_videoclips(final_clips, method="compose")
+            
+            # Determine video size for intro/outro
+            video_size = tuple(main_video.size) if hasattr(main_video, 'size') else (1280, 720)
+            
+            # 5. Add Intro and Outro Cards
+            all_video_parts = []
+            intro_card = None
+            outro_card = None
+            
+            # Intro Card (configurable duration)
+            if Config.INTRO_ENABLED:
+                try:
+                    intro_duration = Config.INTRO_DURATION
+                    intro_card = self._create_intro_card(
+                        house_info or {}, 
+                        script_segments or [], 
+                        video_size, 
+                        duration=intro_duration
+                    )
+                    all_video_parts.append(intro_card)
+                    logger.info(f"Intro card added successfully ({intro_duration}s)")
+                except Exception as e:
+                    logger.warning(f"Failed to add intro card: {e}")
+                    intro_card = None
+            
+            # Main video content
+            all_video_parts.append(main_video)
+            
+            # Outro Card (configurable duration)
+            if Config.OUTRO_ENABLED:
+                try:
+                    outro_duration = Config.OUTRO_DURATION
+                    outro_card = self._create_outro_card(
+                        house_info or {}, 
+                        script_segments or [], 
+                        video_size, 
+                        duration=outro_duration
+                    )
+                    all_video_parts.append(outro_card)
+                    logger.info(f"Outro card added successfully ({outro_duration}s)")
+                except Exception as e:
+                    logger.warning(f"Failed to add outro card: {e}")
+                    outro_card = None
+            
+            # Concatenate all parts (intro + main + outro)
+            final_video = concatenate_videoclips(all_video_parts, method="compose")
 
             # --- Subtitle Integration (P0 Feature) ---
             if script_segments and Config.SUBTITLE_ENABLED:
                 try:
+                    # Calculate time offset for subtitles (after intro)
+                    subtitle_offset = Config.INTRO_DURATION if Config.INTRO_ENABLED else 0.0
+                    
                     logger.info(
                         "Starting subtitle generation",
                         extra={
                             "event": "subtitle.generation.start",
                             "segment_count": len(script_segments),
-                            "video_duration": float(final_video.duration)
+                            "video_duration": float(final_video.duration),
+                            "time_offset": subtitle_offset
                         }
                     )
                     video_size = tuple(final_video.size) if hasattr(final_video, 'size') else (1280, 720)
-                    subtitle_clips = self._generate_subtitle_clips(script_segments, video_size)
+                    subtitle_clips = self._generate_subtitle_clips(script_segments, video_size, time_offset=subtitle_offset)
                     
                     if subtitle_clips:
                         logger.info(
@@ -845,19 +1186,30 @@ class VideoRenderer:
                 raise RuntimeError("rendered mp4 has no audio stream")
             
         finally:
-            # Cleanup clips
+            # Cleanup video clips
             for clip in final_clips:
                 try:
                     clip.close()
-                    if clip.audio: clip.audio.close()
-                except: pass
+                    if clip.audio: 
+                        clip.audio.close()
+                except Exception:
+                    pass
+            
+            # Cleanup intro/outro cards
+            for card in [intro_card, outro_card]:
+                if card is not None:
+                    try:
+                        card.close()
+                    except Exception:
+                        pass
             
             # Cleanup temp files
             for p in temp_files_to_clean:
                 if os.path.exists(p):
                     try:
                         os.remove(p)
-                    except: pass
+                    except Exception:
+                        pass
                 
         return output_path
 
