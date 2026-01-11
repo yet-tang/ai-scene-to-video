@@ -1028,7 +1028,8 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
                 temp_video.name, 
                 bgm_path=bgm_path,
                 script_segments=segments,  # Enable subtitle generation
-                house_info=house_info  # Enable intelligent AI enhancement
+                house_info=house_info,  # Enable intelligent AI enhancement
+                audio_gen=audio_gen  # Enable intro voice generation
             )
 
             # 4. Upload
@@ -1149,7 +1150,8 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 temp_video.name, 
                 bgm_path=bgm_path,
                 script_segments=segments,  # Enable subtitle generation
-                house_info=house_info  # Enable intelligent AI enhancement
+                house_info=house_info,  # Enable intelligent AI enhancement
+                audio_gen=audio_gen  # Enable intro voice generation
             )
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")

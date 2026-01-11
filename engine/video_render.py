@@ -1,6 +1,9 @@
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip, CompositeAudioClip
 from config import Config
 import boto3
+import dashscope
+from dashscope import Generation
+from http import HTTPStatus
 import json
 import logging
 import os
@@ -25,6 +28,9 @@ DEFAULT_FALLBACK_TITLE = '温馨之家'
 DEFAULT_FALLBACK_TAGLINE = '用心感受，温暖生活'
 DEFAULT_FALLBACK_CTA = ('预约看房，开启美好生活', '期待您的到来')
 INTRO_BG_COLOR = (20, 20, 30)  # Dark blue-gray
+
+# Intro voice script templates (开场白模板) - Fallback only
+INTRO_VOICE_FALLBACK = "大家好，今天带大家看一套温馨的房子，跟我一起来感受一下吧！"
 
 class VideoRenderer:
     def __init__(self, aliyun_client=None, sfx_library=None):
@@ -262,6 +268,124 @@ class VideoRenderer:
         description = house_info.get('description', '') if house_info else ''
         return f"{all_text} {description}"
 
+    def _generate_intro_voice_script(self, house_info: dict, script_segments: list) -> str:
+        """
+        Generate intro voice-over script using LLM.
+        
+        使用大模型生成视频开场白文案，介绍房源基本信息。
+        
+        Args:
+            house_info: Project metadata (title, description)
+            script_segments: Script segments for context
+        
+        Returns:
+            Voice script text for intro TTS
+        """
+        # Ensure dashscope API key is set
+        if not Config.DASHSCOPE_API_KEY:
+            logger.warning("DASHSCOPE_API_KEY not set, using fallback intro")
+            return INTRO_VOICE_FALLBACK
+        
+        dashscope.api_key = Config.DASHSCOPE_API_KEY
+        
+        title = house_info.get('title', '').strip() if house_info else ''
+        description = house_info.get('description', '').strip() if house_info else ''
+        
+        # Build context from script segments
+        script_preview = ''
+        if script_segments:
+            first_texts = [seg.get('text', '')[:50] for seg in script_segments[:3] if seg.get('text')]
+            script_preview = ' '.join(first_texts)
+        
+        # Build prompt for LLM
+        prompt = f"""
+# Role
+你是一位专业的房产短视频主播，擅长"温情生活风"的开场白创作。
+
+# Task
+为一条房产看房视频撰写一段自然、亲切的开场白。开场白应该介绍这套房子的基本情况，让观众对要看的房子有个初步了解。
+
+# 房源信息
+- 标题: {title or '未提供'}
+- 描述: {description or '未提供'}
+- 视频内容预览: {script_preview or '未提供'}
+
+# Style Guidelines
+1. **口语化**: 像朋友聊天一样自然，不要僵硬的书面语
+2. **热情亲切**: 带有热情，让人感觉被欢迎
+3. **信息完整**: 尽可能包含小区名称/位置、户型（几室几厅）、亮点特色
+4. **简洁明快**: 控制在 30-50 字以内，读起来 5-8 秒
+
+# Constraints
+- 必须以"大家好"或类似的问候开头
+- 必须以引导用语结束，如"走，进去看看"、"跟我一起感受一下"
+- 不要加任何标点符号外的装饰（如 emoji）
+- 只输出开场白文本，不要输出其他内容
+
+# Output Examples
+例1: "大家好，今天带大家看的这套是位于滨江苑的三居室，采光特别棒，能看到江景。走，进去感受一下！"
+例2: "嗨，朋友们好！今天这套房子在南山府，两室一厅，温馨舒适，特别适合小两口。来，带你们看看。"
+例3: "大家好啊，今天给大家带来一套豪华大平层，180平的江景房，视野开阔。一起来感受一下这种品质感。"
+
+# Action
+请直接输出开场白文本，不要包含任何其他内容。
+"""
+        
+        messages = [
+            {'role': 'system', 'content': '你是一位专业的房产视频主播，输出简洁的开场白文案。'},
+            {'role': 'user', 'content': prompt}
+        ]
+        
+        try:
+            response = Generation.call(
+                model='qwen-plus',
+                messages=messages,
+                result_format='message',
+                temperature=0.8  # Slightly higher for more natural variation
+            )
+            
+            if response.status_code == HTTPStatus.OK:
+                intro_script = response.output.choices[0].message.content.strip()
+                
+                # Clean up any extra quotes or markdown
+                intro_script = intro_script.strip('"').strip("'").strip()
+                if intro_script.startswith('“') and intro_script.endswith('”'):
+                    intro_script = intro_script[1:-1]
+                
+                # Validate length (should be 20-80 chars)
+                if len(intro_script) < 15 or len(intro_script) > 100:
+                    logger.warning(
+                        f"Generated intro script has unusual length ({len(intro_script)}), using fallback",
+                        extra={"event": "intro.voice.length_warning", "length": len(intro_script)}
+                    )
+                    # Still use it if it seems valid
+                    if len(intro_script) < 10:
+                        return INTRO_VOICE_FALLBACK
+                
+                logger.info(
+                    "Generated intro voice script via LLM",
+                    extra={
+                        "event": "intro.voice.llm_generated",
+                        "script_length": len(intro_script),
+                        "script_preview": intro_script[:50] if intro_script else None,
+                    }
+                )
+                
+                return intro_script
+            else:
+                logger.warning(
+                    f"LLM call failed for intro script: {response.message}",
+                    extra={"event": "intro.voice.llm_failed", "error": str(response.message)[:100]}
+                )
+                return INTRO_VOICE_FALLBACK
+                
+        except Exception as e:
+            logger.warning(
+                f"Failed to generate intro script via LLM: {e}",
+                extra={"event": "intro.voice.llm_error", "error": str(e)[:100]}
+            )
+            return INTRO_VOICE_FALLBACK
+
     def _generate_intro_title_and_tagline(self, house_info: dict, script_segments: list) -> tuple[str, str]:
         """
         Generate intelligent title and tagline from video content.
@@ -344,24 +468,56 @@ class VideoRenderer:
         # Default fallback
         return DEFAULT_FALLBACK_TAGLINE
     
-    def _create_intro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0) -> 'CompositeVideoClip':
+    def _create_intro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0, audio_clip=None, background_video=None) -> 'CompositeVideoClip':
         """
         Generate professional intro card with intelligent title and tagline.
+        
+        Supports two modes:
+        1. Static mode: Solid color background with text overlay
+        2. Video mode: First video clip as background with text overlay and voice-over
         
         Args:
             house_info: Project metadata (title, description)
             script_segments: Script segments for content analysis
             video_size: Video resolution tuple (width, height)
             duration: Intro card duration in seconds
+            audio_clip: Optional audio clip for voice-over
+            background_video: Optional video clip to use as background
         
         Returns:
             CompositeVideoClip with intro overlay
         """
         try:
-            # Background: Elegant gradient or solid color
-            bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
+            overlay_clips = []
             
-            overlay_clips = [bg_clip]
+            # Background selection
+            if background_video is not None and Config.INTRO_USE_FIRST_VIDEO:
+                # Use video as background with darkening overlay
+                try:
+                    # Ensure video fits the duration
+                    if background_video.duration >= duration:
+                        bg_video = background_video.subclip(0, duration)
+                    else:
+                        # Loop video if too short
+                        bg_video = background_video.fx(vfx.loop, duration=duration)
+                    
+                    # Resize to match target size
+                    if tuple(bg_video.size) != video_size:
+                        bg_video = bg_video.resize(newsize=video_size)
+                    
+                    # Apply darkening effect for text readability
+                    bg_video = bg_video.fx(vfx.colorx, 0.5)  # Darken to 50%
+                    
+                    overlay_clips.append(bg_video)
+                    logger.info("Using video background for intro card")
+                except Exception as e:
+                    logger.warning(f"Failed to use video background, falling back to solid color: {e}")
+                    bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
+                    overlay_clips.append(bg_clip)
+            else:
+                # Solid color background
+                bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
+                overlay_clips.append(bg_clip)
             
             # Generate intelligent title and tagline
             title_text, tagline = self._generate_intro_title_and_tagline(house_info, script_segments)
@@ -406,7 +562,21 @@ class VideoRenderer:
             except Exception as e:
                 logger.warning(f"Failed to create intro tagline: {e}")
             
-            return CompositeVideoClip(overlay_clips)
+            # Create composite
+            intro_composite = CompositeVideoClip(overlay_clips)
+            
+            # Attach audio if provided
+            if audio_clip is not None:
+                try:
+                    # Ensure audio matches duration
+                    if audio_clip.duration > duration:
+                        audio_clip = audio_clip.subclip(0, duration)
+                    intro_composite = intro_composite.set_audio(audio_clip)
+                    logger.info(f"Attached voice-over audio to intro ({audio_clip.duration:.2f}s)")
+                except Exception as e:
+                    logger.warning(f"Failed to attach intro audio: {e}")
+            
+            return intro_composite
             
         except Exception as e:
             logger.error(f"Intro card generation failed: {e}")
@@ -853,13 +1023,14 @@ class VideoRenderer:
         
         return sfx_clips
 
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None) -> str:
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
         bgm_path: optional path to background music file
         script_segments: optional list of script segments for subtitle generation
         house_info: optional house information for intelligent AI enhancement
+        audio_gen: optional AudioGenerator instance for intro voice generation
         """
         final_clips = []
         temp_files_to_clean = []
@@ -1042,19 +1213,62 @@ class VideoRenderer:
             all_video_parts = []
             intro_card = None
             outro_card = None
+            intro_audio_path = None  # Track for cleanup
+            first_video_clip = None  # For intro background
             
-            # Intro Card (configurable duration)
+            # Get first video clip for intro background (before it's modified)
+            if Config.INTRO_ENABLED and Config.INTRO_USE_FIRST_VIDEO and final_clips:
+                try:
+                    # Clone first clip for intro background
+                    first_clip = final_clips[0]
+                    if first_clip is not None and not getattr(first_clip, "__placeholder__", False):
+                        first_video_clip = first_clip.copy()
+                        logger.info("Prepared first video clip for intro background")
+                except Exception as e:
+                    logger.warning(f"Failed to prepare first video clip for intro: {e}")
+                    first_video_clip = None
+            
+            # Intro Card (with optional voice-over)
             if Config.INTRO_ENABLED:
                 try:
                     intro_duration = Config.INTRO_DURATION
+                    intro_audio_clip = None
+                    
+                    # Generate intro voice-over if enabled
+                    if Config.INTRO_VOICE_ENABLED and audio_gen is not None:
+                        try:
+                            # Generate intro voice script
+                            intro_script = self._generate_intro_voice_script(house_info or {}, script_segments or [])
+                            
+                            if intro_script:
+                                # Generate TTS audio for intro
+                                intro_audio_path = os.path.join(
+                                    tempfile.gettempdir(), 
+                                    f"intro_voice_{int(time.time())}.mp3"
+                                )
+                                audio_gen.generate_audio(intro_script, intro_audio_path)
+                                
+                                if os.path.exists(intro_audio_path):
+                                    intro_audio_clip = AudioFileClip(intro_audio_path)
+                                    # Intro duration is based on voice duration + small buffer
+                                    intro_duration = intro_audio_clip.duration + 0.5
+                                    logger.info(
+                                        f"Generated intro voice: duration={intro_audio_clip.duration:.2f}s, script='{intro_script[:50]}...'"
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Failed to generate intro voice, using static intro: {e}")
+                            intro_audio_clip = None
+                    
                     intro_card = self._create_intro_card(
                         house_info or {}, 
                         script_segments or [], 
                         video_size, 
-                        duration=intro_duration
+                        duration=intro_duration,
+                        audio_clip=intro_audio_clip,
+                        background_video=first_video_clip
                     )
                     all_video_parts.append(intro_card)
-                    logger.info(f"Intro card added successfully ({intro_duration}s)")
+                    logger.info(f"Intro card added successfully ({intro_duration:.2f}s, voice={intro_audio_clip is not None})")
                 except Exception as e:
                     logger.warning(f"Failed to add intro card: {e}")
                     intro_card = None
@@ -1080,12 +1294,20 @@ class VideoRenderer:
             
             # Concatenate all parts (intro + main + outro)
             final_video = concatenate_videoclips(all_video_parts, method="compose")
+            
+            # Calculate actual intro duration for subtitle offset
+            actual_intro_duration = 0.0
+            if intro_card is not None:
+                try:
+                    actual_intro_duration = intro_card.duration
+                except Exception:
+                    actual_intro_duration = Config.INTRO_DURATION if Config.INTRO_ENABLED else 0.0
 
             # --- Subtitle Integration (P0 Feature) ---
             if script_segments and Config.SUBTITLE_ENABLED:
                 try:
                     # Calculate time offset for subtitles (after intro)
-                    subtitle_offset = Config.INTRO_DURATION if Config.INTRO_ENABLED else 0.0
+                    subtitle_offset = actual_intro_duration
                     
                     logger.info(
                         "Starting subtitle generation",
@@ -1202,6 +1424,20 @@ class VideoRenderer:
                         card.close()
                     except Exception:
                         pass
+            
+            # Cleanup first video clip (intro background)
+            if first_video_clip is not None:
+                try:
+                    first_video_clip.close()
+                except Exception:
+                    pass
+            
+            # Cleanup intro audio temp file
+            if intro_audio_path and os.path.exists(intro_audio_path):
+                try:
+                    os.remove(intro_audio_path)
+                except Exception:
+                    pass
             
             # Cleanup temp files
             for p in temp_files_to_clean:

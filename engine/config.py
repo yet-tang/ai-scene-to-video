@@ -71,8 +71,12 @@ class Config:
     # Intro/Outro Card Configuration
     INTRO_ENABLED = os.getenv("INTRO_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
     OUTRO_ENABLED = os.getenv("OUTRO_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
-    INTRO_DURATION = float(os.getenv("INTRO_DURATION", "3.0"))  # Seconds
+    INTRO_DURATION = float(os.getenv("INTRO_DURATION", "3.0"))  # Seconds (fallback if no voice)
     OUTRO_DURATION = float(os.getenv("OUTRO_DURATION", "3.0"))  # Seconds
+    
+    # Intro Voice Configuration (开场白语音)
+    INTRO_VOICE_ENABLED = os.getenv("INTRO_VOICE_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    INTRO_USE_FIRST_VIDEO = os.getenv("INTRO_USE_FIRST_VIDEO", "true").lower() in {"1", "true", "yes", "y"}  # Use first video as intro background
 
     # Performance Optimization
     RENDER_THREADS = int(os.getenv("RENDER_THREADS", "4"))  # FFmpeg rendering threads
