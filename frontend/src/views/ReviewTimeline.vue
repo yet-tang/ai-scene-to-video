@@ -427,14 +427,36 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
     if (count <= 0) return result
     if (!text) return result
     
+    // Clean up text before parsing
+    let cleanText = text.trim()
+    
+    // Remove BOM and other invisible characters
+    cleanText = cleanText.replace(/^\uFEFF/, '').replace(/^\u00EF\u00BB\u00BF/, '')
+    
+    // Try to extract JSON if wrapped in markdown code blocks
+    if (cleanText.startsWith('```json')) {
+        cleanText = cleanText.slice(7)
+    } else if (cleanText.startsWith('```')) {
+        cleanText = cleanText.slice(3)
+    }
+    if (cleanText.endsWith('```')) {
+        cleanText = cleanText.slice(0, -3)
+    }
+    cleanText = cleanText.trim()
+    
+    // Debug log
+    console.log('distributeScript input (first 200 chars):', cleanText.slice(0, 200))
+    
     // Try parse JSON
     try {
-        const data = JSON.parse(text)
+        const data = JSON.parse(cleanText)
+        console.log('JSON parsed successfully:', typeof data)
         
         // New format: { intro_text: "...", segments: [...] }
         if (data && typeof data === 'object' && !Array.isArray(data)) {
             result.intro = data.intro_text || ''
             const segments = data.segments || []
+            console.log('New format detected, intro:', result.intro.slice(0, 50), 'segments:', segments.length)
             
             // Map by asset_id
             const map: Record<string, string> = {}
@@ -453,6 +475,7 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
         
         // Old format: array
         if (Array.isArray(data)) {
+            console.log('Old format (array) detected, length:', data.length)
             // Map by asset_id
             const map: Record<string, string> = {}
             data.forEach(item => {
@@ -468,9 +491,40 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
             return result
         }
     } catch (e) {
-        // Not JSON, fall through
+        // JSON parse failed, try to extract JSON from text
+        console.warn('JSON parse failed:', e)
+        console.warn('Raw text (first 300 chars):', text.slice(0, 300))
+        
+        // Try to find and extract JSON object
+        const jsonStart = cleanText.indexOf('{')
+        const jsonEnd = cleanText.lastIndexOf('}')
+        if (jsonStart !== -1 && jsonEnd > jsonStart) {
+            try {
+                const jsonPart = cleanText.slice(jsonStart, jsonEnd + 1)
+                console.log('Trying to extract JSON from:', jsonPart.slice(0, 100))
+                const data = JSON.parse(jsonPart)
+                if (data && typeof data === 'object' && !Array.isArray(data)) {
+                    result.intro = data.intro_text || ''
+                    const segments = data.segments || []
+                    const map: Record<string, string> = {}
+                    segments.forEach((item: any) => {
+                        if (item.asset_id) map[item.asset_id] = item.text || ''
+                    })
+                    if (assetsList.length > 0) {
+                        result.scripts = assetsList.map(a => map[a.id] || '')
+                    } else {
+                        result.scripts = segments.map((item: any) => item.text || '').slice(0, count)
+                    }
+                    console.log('JSON extraction successful!')
+                    return result
+                }
+            } catch (e2) {
+                console.warn('JSON extraction also failed:', e2)
+            }
+        }
     }
     
+    console.warn('Falling back to plain text split')
     // Plain text fallback: split by sentences
     const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
     

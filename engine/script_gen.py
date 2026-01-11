@@ -150,14 +150,49 @@ class ScriptGenerator:
                             "segments": data.get("segments", [data])
                         }, ensure_ascii=False)
                         
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # Fallback: try to extract json part if mixed with text
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Initial JSON parse failed: {e}")
+                logger.warning(f"Raw content (first 500 chars): {clean_script[:500]}")
+                
                 start = clean_script.find('{')
                 end = clean_script.rfind('}')
-                if start != -1 and end != -1:
-                    clean_script = clean_script[start:end+1]
+                if start != -1 and end != -1 and end > start:
+                    json_part = clean_script[start:end+1]
+                    try:
+                        # Validate the extracted JSON
+                        extracted_data = json.loads(json_part)
+                        # Re-serialize to ensure clean format
+                        if isinstance(extracted_data, dict) and "segments" in extracted_data:
+                            clean_script = json.dumps(extracted_data, ensure_ascii=False)
+                            logger.info("Successfully extracted and validated JSON object")
+                        else:
+                            logger.warning("Extracted JSON doesn't have segments, returning as-is")
+                            clean_script = json_part
+                    except json.JSONDecodeError as e2:
+                        logger.warning(f"Extracted JSON also invalid: {e2}")
+                        # Try array format
+                        start = clean_script.find('[')
+                        end = clean_script.rfind(']')
+                        if start != -1 and end != -1:
+                            array_part = clean_script[start:end+1]
+                            try:
+                                segments = json.loads(array_part)
+                                clean_script = json.dumps({
+                                    "intro_text": "",
+                                    "segments": segments
+                                }, ensure_ascii=False)
+                                logger.info("Successfully extracted array format and converted")
+                            except json.JSONDecodeError:
+                                logger.error("All JSON extraction attempts failed, returning empty structure")
+                                clean_script = json.dumps({
+                                    "intro_text": "",
+                                    "segments": []
+                                }, ensure_ascii=False)
                 else:
-                    # Try array format
+                    # Try array format as last resort
                     start = clean_script.find('[')
                     end = clean_script.rfind(']')
                     if start != -1 and end != -1:
@@ -168,8 +203,18 @@ class ScriptGenerator:
                                 "intro_text": "",
                                 "segments": segments
                             }, ensure_ascii=False)
-                        except:
-                            pass
+                        except json.JSONDecodeError:
+                            logger.error("Cannot extract valid JSON, returning empty structure")
+                            clean_script = json.dumps({
+                                "intro_text": "",
+                                "segments": []
+                            }, ensure_ascii=False)
+                    else:
+                        logger.error("No JSON structure found, returning empty structure")
+                        clean_script = json.dumps({
+                            "intro_text": "",
+                            "segments": []
+                        }, ensure_ascii=False)
             
             return clean_script
         else:
