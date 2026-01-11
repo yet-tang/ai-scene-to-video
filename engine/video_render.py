@@ -1023,7 +1023,7 @@ class VideoRenderer:
         
         return sfx_clips
 
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None) -> str:
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None, intro_text: str = None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
@@ -1031,6 +1031,7 @@ class VideoRenderer:
         script_segments: optional list of script segments for subtitle generation
         house_info: optional house information for intelligent AI enhancement
         audio_gen: optional AudioGenerator instance for intro voice generation
+        intro_text: optional user-edited intro voice-over text (takes precedence over auto-generation)
         """
         final_clips = []
         temp_files_to_clean = []
@@ -1237,8 +1238,13 @@ class VideoRenderer:
                     # Generate intro voice-over if enabled
                     if Config.INTRO_VOICE_ENABLED and audio_gen is not None:
                         try:
-                            # Generate intro voice script
-                            intro_script = self._generate_intro_voice_script(house_info or {}, script_segments or [])
+                            # Use user-edited intro text if provided, otherwise generate
+                            if intro_text and intro_text.strip():
+                                intro_script = intro_text.strip()
+                                logger.info(f"Using user-provided intro text: '{intro_script[:50]}...'")
+                            else:
+                                # Generate intro voice script via LLM
+                                intro_script = self._generate_intro_voice_script(house_info or {}, script_segments or [])
                             
                             if intro_script:
                                 # Generate TTS audio for intro

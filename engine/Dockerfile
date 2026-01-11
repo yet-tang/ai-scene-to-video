@@ -12,19 +12,35 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure ImageMagick security policy for MoviePy TextClip rendering
+# Support both ImageMagick-6 and ImageMagick-7
 # - Allow reading from temporary files (@ prefix for text input)
-# - Allow PDF/text operations
+# - Allow PDF/text/label operations
 # - Remove restrictive policies that block subtitle generation
-RUN if [ -f /etc/ImageMagick-6/policy.xml ]; then \
-        sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml; \
-        sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/' /etc/ImageMagick-6/policy.xml; \
-        sed -i '/<policy domain="path" rights="none" pattern="@\*"/d' /etc/ImageMagick-6/policy.xml; \
-        sed -i '/<policy domain="coder" rights="none" pattern="TEXT"/d' /etc/ImageMagick-6/policy.xml; \
-        sed -i '/<policy domain="coder" rights="none" pattern="LABEL"/d' /etc/ImageMagick-6/policy.xml; \
-    fi
+RUN for policy_file in /etc/ImageMagick-*/policy.xml; do \
+        if [ -f "$policy_file" ]; then \
+            echo "Configuring ImageMagick policy: $policy_file"; \
+            # Remove restrictive path policy for @ (text input)
+            sed -i '/<policy domain="path" rights="none" pattern="@\*"/d' "$policy_file"; \
+            # Allow read|write for @ pattern if exists, or just remove the restriction
+            sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/g' "$policy_file"; \
+            # Allow PDF operations
+            sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' "$policy_file"; \
+            # Remove TEXT/LABEL coder restrictions
+            sed -i '/<policy domain="coder" rights="none" pattern="TEXT"/d' "$policy_file"; \
+            sed -i '/<policy domain="coder" rights="none" pattern="LABEL"/d' "$policy_file"; \
+            # Add explicit allow policy for TEXT if not exists
+            grep -q 'pattern="TEXT"' "$policy_file" || \
+                sed -i '/<policymap>/a \  <policy domain="coder" rights="read|write" pattern="TEXT" />' "$policy_file"; \
+            grep -q 'pattern="LABEL"' "$policy_file" || \
+                sed -i '/<policymap>/a \  <policy domain="coder" rights="read|write" pattern="LABEL" />' "$policy_file"; \
+        fi; \
+    done
 
 # Regenerate font cache for MoviePy/ImageMagick
 RUN fc-cache -f -v || true
+
+# Verify ImageMagick and font setup
+RUN convert -list font | head -20 || echo "Font listing not available"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

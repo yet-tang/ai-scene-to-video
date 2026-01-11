@@ -12,7 +12,11 @@ class ScriptGenerator:
     def generate_script(self, house_info: dict, timeline_data: list) -> str:
         """
         Generate a video script based on house info and ordered asset timeline.
-        Returns a JSON string of list[dict] structure: [{"asset_id": "...", "text": "..."}]
+        Returns a JSON string of object structure:
+        {
+            "intro_text": "开场白...",
+            "segments": [{"asset_id": "...", "text": "..."}]
+        }
         """
         
         # 1. Build Context with Time Budget
@@ -32,56 +36,69 @@ class ScriptGenerator:
         # 2. Prompt Engineering
         prompt = f"""
 # Role
-你是一位专业的房产短视频解说达人，擅长“温情生活风”文案创作。
+你是一位专业的房产短视频解说达人，擅长"温情生活风"文案创作。
 
 # Context Data
 {context_str}
 
 # Task
-根据视频片段顺序，撰写**严格对应**的口语解说词，并提供视觉和听觉的增强指令。
+1. 先撰写一段开场白（intro_text），用于视频片头介绍这套房子的基本情况
+2. 然后根据视频片段顺序，撰写严格对应的口语解说词
 
 # Style Guidelines ("Warm Life Style")
-1.  **情感化**: 从“描述事实”转为“情绪渲染”。强调“治愈”、“阳光”、“家的味道”。
-2.  **口语拟真**: 杭州本地口语风格，自然真诚，像朋友聊天。
+1.  **情感化**: 从"描述事实"转为"情绪渲染"。强调"治愈"、"阳光"、"家的味道"。
+2.  **口语拟真**: 自然真诚，像朋友聊天。
 3.  **高级感**: 挖掘房源的独特价值（采光、质感）。
 
 # Critical Constraints (MUST FOLLOW)
-1. **结构化输出**: 必须返回一个 JSON 数组，格式如下：
+1. **结构化输出**: 必须返回一个 JSON 对象，格式如下：
    ```json
-   [
-     {{
-       "asset_id": "片段ID",
-       "text": "解说词内容...",
-       "visual_prompt": "English prompt for AI video filter (e.g., 'Warm sunshine, cinematic lighting')",
-       "audio_cue": "SFX suggestion (e.g., 'Birds chirping', 'Soft wind', 'Door open sound')"
-     }},
-     ...
-   ]
+   {{
+     "intro_text": "开场白文案，30-50字，介绍房源基本信息（小区名、户型、特色等），以问候开头，以引导语结尾",
+     "segments": [
+       {{
+         "asset_id": "片段ID",
+         "text": "解说词内容...",
+         "visual_prompt": "English prompt for AI video filter",
+         "audio_cue": "SFX suggestion"
+       }},
+       ...
+     ]
+   }}
    ```
-   **不要**改变 ID，必须原样返回。
+   **不要**改变 asset_id，必须原样返回。
 
-2. **时长预算 (Time Budget)**:
-   - 必须严格遵守每个片段的“建议字数”。
+2. **开场白要求 (intro_text)**:
+   - 必须以"大家好"或类似的问候开头
+   - 必须包含房源的核心信息（位置/小区名、户型、一个亮点）
+   - 必须以引导语结束，如"走，进去看看"、"跟我一起感受一下"
+   - 控制在 30-50 字，读起来 5-8 秒
+
+3. **时长预算 (Time Budget)**:
+   - 必须严格遵守每个片段的"建议字数"。
    - 语速控制在每秒 4 字左右。
 
-3. **视觉锚定**: 解说内容必须与画面场景实时对应。
+4. **视觉锚定**: 解说内容必须与画面场景实时对应。
 
 # Output Example
 ```json
-[
-  {{
-    "asset_id": "uuid-1",
-    "text": "哎，谁能拒绝一个满屋阳光的客厅呢？这种透明感，真的住进去就不想出门。",
-    "visual_prompt": "Bright living room, sunlight streaming through sheer curtains, warm golden hour lighting, 4k, cozy atmosphere",
-    "audio_cue": "Soft morning jazz music"
-  }},
-  {{
-    "asset_id": "uuid-2",
-    "text": "走上这几级台阶，满满的仪式感。独立的衣帽间，藏着你所有的精致。",
-    "visual_prompt": "Walk-in closet, elegant lighting, wooden texture, high resolution",
-    "audio_cue": "Footsteps on wood"
-  }}
-]
+{{
+  "intro_text": "大家好，今天带大家看的这套是位于滨江苑的三居室，采光特别好，还能看到江景。走，进去感受一下！",
+  "segments": [
+    {{
+      "asset_id": "uuid-1",
+      "text": "哎，谁能拒绝一个满屋阳光的客厅呢？这种透明感，真的住进去就不想出门。",
+      "visual_prompt": "Bright living room, sunlight streaming through sheer curtains, warm golden hour lighting, 4k, cozy atmosphere",
+      "audio_cue": "Soft morning jazz music"
+    }},
+    {{
+      "asset_id": "uuid-2",
+      "text": "走上这几级台阶，满满的仪式感。独立的衣帽间，藏着你所有的精致。",
+      "visual_prompt": "Walk-in closet, elegant lighting, wooden texture, high resolution",
+      "audio_cue": "Footsteps on wood"
+    }}
+  ]
+}}
 ```
 
 # Action
@@ -113,15 +130,46 @@ class ScriptGenerator:
             
             clean_script = clean_script.strip()
             
-            # Validation
+            # Validation and format conversion
             try:
-                json.loads(clean_script)
+                data = json.loads(clean_script)
+                
+                # Handle both new format (object with intro_text) and old format (array)
+                if isinstance(data, list):
+                    # Old format: convert to new format
+                    clean_script = json.dumps({
+                        "intro_text": "",
+                        "segments": data
+                    }, ensure_ascii=False)
+                elif isinstance(data, dict):
+                    # New format: ensure structure is correct
+                    if "segments" not in data:
+                        # If it's just an object without segments, treat as array item
+                        clean_script = json.dumps({
+                            "intro_text": data.get("intro_text", ""),
+                            "segments": data.get("segments", [data])
+                        }, ensure_ascii=False)
+                        
             except json.JSONDecodeError:
                 # Fallback: try to extract json part if mixed with text
-                start = clean_script.find('[')
-                end = clean_script.rfind(']')
+                start = clean_script.find('{')
+                end = clean_script.rfind('}')
                 if start != -1 and end != -1:
                     clean_script = clean_script[start:end+1]
+                else:
+                    # Try array format
+                    start = clean_script.find('[')
+                    end = clean_script.rfind(']')
+                    if start != -1 and end != -1:
+                        array_part = clean_script[start:end+1]
+                        try:
+                            segments = json.loads(array_part)
+                            clean_script = json.dumps({
+                                "intro_text": "",
+                                "segments": segments
+                            }, ensure_ascii=False)
+                        except:
+                            pass
             
             return clean_script
         else:

@@ -823,6 +823,12 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
 def _parse_and_align_segments(project_id: str, script_content: str):
     """
     Fetch assets, parse script (JSON/Text), and prepare for audio generation.
+    
+    Returns:
+        Tuple of (segments, timeline_assets, intro_text)
+        - segments: List of dicts with text, duration, asset_id, oss_url
+        - timeline_assets: List of asset metadata
+        - intro_text: Opening voice-over text for intro (may be empty)
     """
     # Fetch assets to get durations
     conn = psycopg2.connect(Config.DB_DSN)
@@ -855,9 +861,30 @@ def _parse_and_align_segments(project_id: str, script_content: str):
         conn.close()
         
     segments = []
+    intro_text = ""  # 片头开场白
+    
     try:
         # Try parsing as JSON
         data = json.loads(script_content)
+        
+        # New format: { "intro_text": "...", "segments": [...] }
+        if isinstance(data, dict) and "segments" in data:
+            intro_text = data.get("intro_text", "")
+            segment_list = data.get("segments", [])
+            text_map = {item.get('asset_id'): item.get('text', '') for item in segment_list}
+            for asset in timeline_assets:
+                aid = asset.get('id')
+                dur = float(asset.get('duration', 5.0))
+                text = text_map.get(aid, '')
+                segments.append({
+                    'text': text,
+                    'duration': dur,
+                    'asset_id': aid,
+                    'oss_url': asset.get('oss_url')
+                })
+            return segments, timeline_assets, intro_text
+        
+        # Old format: array of segments
         if isinstance(data, list):
             text_map = {item.get('asset_id'): item.get('text', '') for item in data}
             for asset in timeline_assets:
@@ -870,7 +897,7 @@ def _parse_and_align_segments(project_id: str, script_content: str):
                     'asset_id': aid,
                     'oss_url': asset.get('oss_url')
                 })
-            return segments, timeline_assets
+            return segments, timeline_assets, intro_text
     except Exception:
         pass
         
@@ -903,7 +930,7 @@ def _parse_and_align_segments(project_id: str, script_content: str):
                 'oss_url': asset.get('oss_url')
             })
             
-    return segments, timeline_assets
+    return segments, timeline_assets, intro_text
 
 @celery_app.task(bind=True, max_retries=3)
 def generate_audio_task(self, project_id: str, script_content: str):
@@ -915,7 +942,7 @@ def generate_audio_task(self, project_id: str, script_content: str):
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("RENDERING", "COMPLETED"))
 
         # Prepare segments
-        segments, _ = _parse_and_align_segments(project_id, script_content)
+        segments, _, _ = _parse_and_align_segments(project_id, script_content)
         
         # Temp dir for segments
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1002,7 +1029,7 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
             conn.close()
 
         # 2. Re-generate aligned audio segments locally
-        segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
+        segments, timeline_assets_db, intro_text = _parse_and_align_segments(project_id, script_content)
         
         # Download BGM if provided
         bgm_path = None
@@ -1029,7 +1056,8 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
                 bgm_path=bgm_path,
                 script_segments=segments,  # Enable subtitle generation
                 house_info=house_info,  # Enable intelligent AI enhancement
-                audio_gen=audio_gen  # Enable intro voice generation
+                audio_gen=audio_gen,  # Enable intro voice generation
+                intro_text=intro_text  # Use user-edited intro text
             )
 
             # 4. Upload
@@ -1080,7 +1108,7 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
     try:
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("COMPLETED",))
         
-        segments, timeline_assets_db = _parse_and_align_segments(project_id, script_content)
+        segments, timeline_assets_db, intro_text = _parse_and_align_segments(project_id, script_content)
         
         # Fetch house info for intelligent AI enhancement
         conn = psycopg2.connect(Config.DB_DSN)
@@ -1151,7 +1179,8 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 bgm_path=bgm_path,
                 script_segments=segments,  # Enable subtitle generation
                 house_info=house_info,  # Enable intelligent AI enhancement
-                audio_gen=audio_gen  # Enable intro voice generation
+                audio_gen=audio_gen,  # Enable intro voice generation
+                intro_text=intro_text  # Use user-edited intro text
             )
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")

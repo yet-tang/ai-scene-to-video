@@ -43,6 +43,26 @@
   </div>
 
     <template v-if="!showProgressOnly">
+    <!-- 片头文案编辑区 -->
+    <div class="intro-card app-card" v-if="introText || isScriptGenerating">
+      <div class="intro-header">
+        <span class="intro-label">🎬 片头开场白</span>
+        <span class="intro-hint">视频开头的语音介绍</span>
+      </div>
+      <van-field
+        v-model="introText"
+        rows="2"
+        autosize
+        type="textarea"
+        placeholder="大家好，今天带大家看的这套是..."
+        class="intro-input"
+      />
+      <div class="intro-tips">
+        <span>建议 30-50 字，包含小区名、户型、一个亮点</span>
+        <span class="intro-length" :class="{ warning: introText.length > 60 }">{{ introText.length }} 字</span>
+      </div>
+    </div>
+
     <div class="overview-card app-card">
       <div class="stat-item">
         <div class="value">{{ assets.length }}</div>
@@ -221,6 +241,7 @@ const mockMode = computed(() => (route.query.mockMode as string) || 'full')
 const mockAssets = computed(() => Number(route.query.mockAssets ?? 5))
 
 const assets = ref<UIAsset[]>([])
+const introText = ref('')  // 片头开场白文案
 const isScriptGenerating = ref(false)
 const isRendering = ref(false)
 let timelinePollTimer: any = null
@@ -273,10 +294,11 @@ onMounted(async () => {
 
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
-    const distributedScripts = distributeScript(globalScript, storeAssets.length, storeAssets)
+    const distributed = distributeScript(globalScript, storeAssets.length, storeAssets)
+    introText.value = distributed.intro
     assets.value = storeAssets.map((a, i) => ({
       ...a,
-      script: distributedScripts[i] || ''
+      script: distributed.scripts[i] || ''
     }))
     analysisDone.value = mockMode.value !== 'progress'
     return
@@ -302,11 +324,12 @@ const loadData = async () => {
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
     
-    const distributedScripts = distributeScript(globalScript, storeAssets.length, storeAssets)
+    const distributed = distributeScript(globalScript, storeAssets.length, storeAssets)
+    introText.value = distributed.intro
     
     assets.value = storeAssets.map((a, i) => ({
         ...a,
-        script: distributedScripts[i] || ''
+        script: distributed.scripts[i] || ''
     }))
     analysisDone.value = assets.value.length > 0 && isSplitDoneStatus(projectStore.currentProject.status)
 
@@ -399,13 +422,36 @@ const processShowProgress = computed(() => {
   return true
 })
 
-const distributeScript = (text: string, count: number, assetsList: Asset[] = []): string[] => {
-    if (count <= 0) return []
-    if (!text) return new Array(count).fill('')
+const distributeScript = (text: string, count: number, assetsList: Asset[] = []): { intro: string, scripts: string[] } => {
+    const result = { intro: '', scripts: new Array(count).fill('') }
+    if (count <= 0) return result
+    if (!text) return result
     
     // Try parse JSON
     try {
         const data = JSON.parse(text)
+        
+        // New format: { intro_text: "...", segments: [...] }
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+            result.intro = data.intro_text || ''
+            const segments = data.segments || []
+            
+            // Map by asset_id
+            const map: Record<string, string> = {}
+            segments.forEach((item: any) => {
+                if (item.asset_id) map[item.asset_id] = item.text || ''
+            })
+            
+            // Return array matching assetsList order
+            if (assetsList.length > 0) {
+                result.scripts = assetsList.map(a => map[a.id] || '')
+            } else {
+                result.scripts = segments.map((item: any) => item.text || '').slice(0, count)
+            }
+            return result
+        }
+        
+        // Old format: array
         if (Array.isArray(data)) {
             // Map by asset_id
             const map: Record<string, string> = {}
@@ -415,29 +461,28 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
             
             // Return array matching assetsList order
             if (assetsList.length > 0) {
-                return assetsList.map(a => map[a.id] || '')
+                result.scripts = assetsList.map(a => map[a.id] || '')
             } else {
-                return data.map((item: any) => item.text || '').slice(0, count)
+                result.scripts = data.map((item: any) => item.text || '').slice(0, count)
             }
+            return result
         }
     } catch (e) {
         // Not JSON, fall through
     }
     
+    // Plain text fallback: split by sentences
     const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
     
     if (sentences.length <= count) {
-        const res = new Array(count).fill('')
-        sentences.forEach((s, i) => res[i] = s)
-        return res
+        sentences.forEach((s, i) => result.scripts[i] = s)
     } else {
-        const res = new Array(count).fill('')
         const perClip = Math.ceil(sentences.length / count)
         for (let i = 0; i < count; i++) {
-            res[i] = sentences.slice(i * perClip, (i + 1) * perClip).join('')
+            result.scripts[i] = sentences.slice(i * perClip, (i + 1) * perClip).join('')
         }
-        return res
     }
+    return result
 }
 
 const onVideoLoaded = (evt: Event, asset: UIAsset) => {
@@ -557,9 +602,10 @@ const startScriptPolling = () => {
     await projectStore.fetchProject(projectId)
     if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
       const fullScript = projectStore.currentProject.script
-      const parts = distributeScript(fullScript, assets.value.length, assets.value)
+      const distributed = distributeScript(fullScript, assets.value.length, assets.value)
+      introText.value = distributed.intro
       assets.value.forEach((a, i) => {
-        if (parts[i]) a.script = parts[i]
+        if (distributed.scripts[i]) a.script = distributed.scripts[i]
       })
 
       isScriptGenerating.value = false
@@ -679,7 +725,11 @@ const onGenerateVideo = async () => {
     return
   }
   
-  const combinedScript = JSON.stringify(scriptSegments)
+  // 组装新格式：包含 intro_text 和 segments
+  const combinedScript = JSON.stringify({
+    intro_text: introText.value || '',
+    segments: scriptSegments
+  })
   
   isRendering.value = true
   try {
@@ -699,6 +749,62 @@ const onGenerateVideo = async () => {
   padding-bottom: 120px;
   background-color: #f7f8fa;
   min-height: 100vh;
+}
+
+/* 片头文案编辑区 */
+.intro-card {
+  margin: 12px 16px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #f5f9ff 0%, #fff8f5 100%);
+  border: 1px solid #e8f3ff;
+}
+
+.intro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.intro-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1989fa;
+}
+
+.intro-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.intro-input {
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.intro-input :deep(.van-field__control) {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.intro-tips {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  padding: 0 4px;
+}
+
+.intro-length {
+  color: #64748b;
+}
+
+.intro-length.warning {
+  color: #ff976a;
 }
 
 .overview-card {
