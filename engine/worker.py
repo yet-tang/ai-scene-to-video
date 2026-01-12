@@ -166,5 +166,16 @@ except Exception as e:
     import logging
     logging.warning(f"Failed to configure MoviePy ImageMagick: {e}")
 
+# Print version info on startup
+import os
+image_tag = os.getenv('IMAGE_TAG', 'unknown')
+git_commit = os.getenv('GIT_COMMIT', 'unknown')
+build_time = os.getenv('BUILD_TIME', 'unknown')
+logging.info("=== Engine Version Info ===")
+logging.info(f"Image Tag: {image_tag}")
+logging.info(f"Git Commit: {git_commit}")
+logging.info(f"Build Time: {build_time}")
+logging.info("===========================")
+
 if __name__ == '__main__':
     celery_app.start()

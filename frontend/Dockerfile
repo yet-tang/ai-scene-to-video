@@ -8,16 +8,25 @@ COPY . .
 # Build args
 ARG VITE_API_BASE_URL
 ARG VITE_API_KEY
+ARG IMAGE_TAG=unknown
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME
 
 # Set as env vars for build
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 ENV VITE_API_KEY=$VITE_API_KEY
+ENV VITE_IMAGE_TAG=$IMAGE_TAG
+ENV VITE_GIT_COMMIT=$GIT_COMMIT
+ENV VITE_BUILD_TIME=$BUILD_TIME
 
 # Debug: Print env vars during build
 RUN echo "=== Build Environment ==="
 RUN echo "VITE_API_BASE_URL: $VITE_API_BASE_URL"
 RUN echo "VITE_API_KEY: ${VITE_API_KEY:+<set>}${VITE_API_KEY:-<not set>}"
 RUN echo "NODE_ENV: ${NODE_ENV:-production}"
+RUN echo "IMAGE_TAG: $IMAGE_TAG"
+RUN echo "GIT_COMMIT: $GIT_COMMIT"
+RUN echo "BUILD_TIME: $BUILD_TIME"
 RUN echo "========================="
 
 # Build for production

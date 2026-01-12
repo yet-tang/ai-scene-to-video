@@ -2,6 +2,15 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ARG IMAGE_TAG=unknown
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME
+
+# Set version info as environment variables
+ENV IMAGE_TAG=$IMAGE_TAG
+ENV GIT_COMMIT=$GIT_COMMIT
+ENV BUILD_TIME=$BUILD_TIME
+
 # Install system dependencies for OpenCV, FFmpeg, ImageMagick, and fonts
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
@@ -46,6 +55,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# Print version info at startup
+RUN echo "=== Engine Build Info ===" && \
+    echo "IMAGE_TAG: $IMAGE_TAG" && \
+    echo "GIT_COMMIT: $GIT_COMMIT" && \
+    echo "BUILD_TIME: $BUILD_TIME" && \
+    echo "========================="
 
 # Start Celery Worker
 # Concurrency can be controlled via CELERY_WORKER_CONCURRENCY env var (default: 2 for 4GB VPS)

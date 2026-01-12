@@ -64,6 +64,26 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Prepare version info
+        id: version
+        run: |
+          # Extract short SHA
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          # Get build time in ISO 8601 format
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # Determine image tag (use first tag from metadata)
+          IMAGE_TAG=$(echo '${{ steps.meta.outputs.tags }}' | head -n 1 | cut -d':' -f2)
+          
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          
+          echo "=== Version Info ==="
+          echo "Image Tag: $IMAGE_TAG"
+          echo "Git Commit: $SHORT_SHA"
+          echo "Build Time: $BUILD_TIME"
+          echo "===================="
+
       - name: Debug frontend build args
         if: matrix.service.name == 'frontend'
         run: |
@@ -85,11 +105,19 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
           build-args: |
+            IMAGE_TAG=${{ steps.version.outputs.image_tag }}
+            GIT_COMMIT=${{ steps.version.outputs.short_sha }}
+            BUILD_TIME=${{ steps.version.outputs.build_time }}
             ${{ matrix.service.name == 'frontend' && format('VITE_API_BASE_URL={0}', vars.VITE_API_BASE_URL) || '' }}
             ${{ matrix.service.name == 'frontend' && format('VITE_API_KEY={0}', secrets.VITE_API_KEY) || '' }}
 
       - name: Output image info
         run: |
+          echo "=== Build Summary ==="
           echo "Service: ${{ matrix.service.name }}"
-          echo "Tags: ${{ steps.meta.outputs.tags }}"
-          echo "Labels: ${{ steps.meta.outputs.labels }}"
+          echo "Image Tag: ${{ steps.version.outputs.image_tag }}"
+          echo "Git Commit: ${{ steps.version.outputs.short_sha }}"
+          echo "Build Time: ${{ steps.version.outputs.build_time }}"
+          echo "Full Tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo "====================="
