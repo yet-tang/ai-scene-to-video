@@ -46,8 +46,9 @@ class Config:
 
     # Subtitle Configuration (P0 Feature)
     SUBTITLE_ENABLED = os.getenv("SUBTITLE_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
-    # Use Liberation Sans Bold (Arial-compatible font available in Docker)
-    SUBTITLE_FONT = os.getenv("SUBTITLE_FONT", "Liberation-Sans-Bold")
+    # Use Noto Sans CJK SC (Chinese font available in Docker via fonts-noto-cjk)
+    # This font supports Chinese characters for subtitle rendering
+    SUBTITLE_FONT = os.getenv("SUBTITLE_FONT", "Noto-Sans-CJK-SC-Bold")
     SUBTITLE_FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "48"))
     SUBTITLE_POSITION = float(os.getenv("SUBTITLE_POSITION", "0.75"))  # 0-1, relative to screen height
 

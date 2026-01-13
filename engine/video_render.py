@@ -230,6 +230,60 @@ class VideoRenderer:
         clip = ColorClip(size=(size or (1280, 720)), color=(0, 0, 0), duration=safe_dur)
         return clip
 
+    def _extend_with_last_frame(self, clip, target_duration: float):
+        """
+        Extend a video clip to target duration by freezing the last frame.
+        More natural than boomerang (forward-backward looping).
+        
+        Args:
+            clip: Original VideoFileClip
+            target_duration: Target duration in seconds
+        
+        Returns:
+            Extended clip with last frame frozen for the remaining time
+        """
+        try:
+            from moviepy.editor import ImageClip
+            
+            current_dur = clip.duration
+            if current_dur >= target_duration:
+                return clip.subclip(0, target_duration)
+            
+            # Get the last frame
+            last_frame_time = max(0, current_dur - 0.05)  # Slightly before end to avoid edge issues
+            last_frame = clip.get_frame(last_frame_time)
+            
+            # Create a frozen frame clip for the remaining duration
+            remaining = target_duration - current_dur
+            freeze_clip = ImageClip(last_frame, duration=remaining)
+            
+            # Match size if needed
+            if tuple(freeze_clip.size) != tuple(clip.size):
+                freeze_clip = freeze_clip.resize(newsize=clip.size)
+            
+            # Concatenate original video with frozen frame
+            extended = concatenate_videoclips([clip, freeze_clip])
+            
+            # Ensure exact duration
+            if extended.duration > target_duration:
+                extended = extended.subclip(0, target_duration)
+            
+            logger.info(
+                f"Extended video with last frame freeze",
+                extra={
+                    "event": "video.extend.freeze",
+                    "original_duration": current_dur,
+                    "target_duration": target_duration,
+                    "freeze_duration": remaining
+                }
+            )
+            
+            return extended
+            
+        except Exception as e:
+            logger.warning(f"Last frame freeze failed: {e}, returning original clip")
+            return clip
+
     def _apply_warm_filter(self, clip):
         """
         Apply a warm sunshine look using numpy:
@@ -468,21 +522,22 @@ class VideoRenderer:
         # Default fallback
         return DEFAULT_FALLBACK_TAGLINE
     
-    def _create_intro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0, audio_clip=None, background_video=None) -> 'CompositeVideoClip':
+    def _create_intro_card(self, house_info: dict, script_segments: list, video_size: tuple[int, int], duration: float = 3.0, audio_clip=None, background_video=None, intro_card: dict = None) -> 'CompositeVideoClip':
         """
-        Generate professional intro card with intelligent title and tagline.
+        Generate professional intro card with multi-layer information display.
         
-        Supports two modes:
-        1. Static mode: Solid color background with text overlay
-        2. Video mode: First video clip as background with text overlay and voice-over
+        Uses first frame of the first video clip as a STATIC background image,
+        with headline, specs, and highlights overlaid in a stacked layout.
+        This design is inspired by high-performing real estate video covers.
         
         Args:
             house_info: Project metadata (title, description)
             script_segments: Script segments for content analysis
             video_size: Video resolution tuple (width, height)
-            duration: Intro card duration in seconds
+            duration: Intro card duration in seconds (determined by voice-over length)
             audio_clip: Optional audio clip for voice-over
-            background_video: Optional video clip to use as background
+            background_video: Optional video clip to extract first frame from
+            intro_card: Structured intro card data with headline, specs, highlights
         
         Returns:
             CompositeVideoClip with intro overlay
@@ -490,28 +545,27 @@ class VideoRenderer:
         try:
             overlay_clips = []
             
-            # Background selection
+            # Background selection: Use FIRST FRAME as static image
             if background_video is not None and Config.INTRO_USE_FIRST_VIDEO:
-                # Use video as background with darkening overlay
                 try:
-                    # Ensure video fits the duration
-                    if background_video.duration >= duration:
-                        bg_video = background_video.subclip(0, duration)
-                    else:
-                        # Loop video if too short
-                        bg_video = background_video.fx(vfx.loop, duration=duration)
+                    # Extract first frame as static image
+                    first_frame = background_video.get_frame(0)
                     
-                    # Resize to match target size
-                    if tuple(bg_video.size) != video_size:
-                        bg_video = bg_video.resize(newsize=video_size)
+                    # Create ImageClip from the first frame
+                    from moviepy.editor import ImageClip
+                    bg_image = ImageClip(first_frame, duration=duration)
+                    
+                    # Resize to match target size if needed
+                    if tuple(bg_image.size) != video_size:
+                        bg_image = bg_image.resize(newsize=video_size)
                     
                     # Apply darkening effect for text readability
-                    bg_video = bg_video.fx(vfx.colorx, 0.5)  # Darken to 50%
+                    bg_image = bg_image.fx(vfx.colorx, 0.5)  # Darken to 50%
                     
-                    overlay_clips.append(bg_video)
-                    logger.info("Using video background for intro card")
+                    overlay_clips.append(bg_image)
+                    logger.info(f"Using first frame as static intro background (duration={duration:.2f}s)")
                 except Exception as e:
-                    logger.warning(f"Failed to use video background, falling back to solid color: {e}")
+                    logger.warning(f"Failed to extract first frame, falling back to solid color: {e}")
                     bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
                     overlay_clips.append(bg_clip)
             else:
@@ -519,58 +573,60 @@ class VideoRenderer:
                 bg_clip = ColorClip(size=video_size, color=INTRO_BG_COLOR, duration=duration)
                 overlay_clips.append(bg_clip)
             
-            # Generate intelligent title and tagline
-            title_text, tagline = self._generate_intro_title_and_tagline(house_info, script_segments)
-            
-            logger.info(f"Intro card: title='{title_text}', tagline='{tagline}'")
-            
-            # Main title
-            try:
-                title_clip = TextClip(
-                    title_text,
-                    fontsize=min(80, video_size[0] // TITLE_FONT_SIZE_RATIO),
-                    color='#F5F5DC',  # Beige white
-                    font=Config.SUBTITLE_FONT,
-                    stroke_color='#D4AF37',  # Gold outline
-                    stroke_width=2,
-                    method='caption',
-                    size=(video_size[0] * 0.8, None),
-                    align='center'
-                )
-                title_clip = title_clip.set_position(('center', 0.35), relative=True)
-                title_clip = title_clip.set_duration(duration)
-                title_clip = title_clip.crossfadein(0.8).crossfadeout(0.5)
-                overlay_clips.append(title_clip)
-            except Exception as e:
-                logger.warning(f"Failed to create intro title: {e}")
-            
-            # Tagline / Subtitle
-            try:
-                tagline_clip = TextClip(
-                    tagline,
-                    fontsize=min(40, video_size[0] // TAGLINE_FONT_SIZE_RATIO),
-                    color='white',
-                    font=Config.SUBTITLE_FONT,
-                    method='caption',
-                    size=(video_size[0] * 0.7, None),
-                    align='center'
-                )
-                tagline_clip = tagline_clip.set_position(('center', 0.50), relative=True)
-                tagline_clip = tagline_clip.set_duration(duration)
-                tagline_clip = tagline_clip.crossfadein(1.0).crossfadeout(0.5)
-                overlay_clips.append(tagline_clip)
-            except Exception as e:
-                logger.warning(f"Failed to create intro tagline: {e}")
+            # Check if we have structured intro_card data (new format)
+            if intro_card and isinstance(intro_card, dict):
+                # New multi-layer layout (inspired by high-performing covers)
+                overlay_clips.extend(self._create_intro_card_layers(intro_card, video_size, duration))
+                logger.info(f"Intro card (new format): headline='{intro_card.get('headline', '')}', specs='{intro_card.get('specs', '')}'")
+            else:
+                # Fallback to old title + tagline format
+                title_text, tagline = self._generate_intro_title_and_tagline(house_info, script_segments)
+                logger.info(f"Intro card (legacy): title='{title_text}', tagline='{tagline}'")
+                
+                # Main title
+                try:
+                    title_clip = TextClip(
+                        title_text,
+                        fontsize=min(80, video_size[0] // TITLE_FONT_SIZE_RATIO),
+                        color='#F5F5DC',
+                        font=Config.SUBTITLE_FONT,
+                        stroke_color='#D4AF37',
+                        stroke_width=2,
+                        method='caption',
+                        size=(video_size[0] * 0.8, None),
+                        align='center'
+                    )
+                    title_clip = title_clip.set_position(('center', 0.35), relative=True)
+                    title_clip = title_clip.set_duration(duration)
+                    title_clip = title_clip.crossfadein(0.5).crossfadeout(0.3)
+                    overlay_clips.append(title_clip)
+                except Exception as e:
+                    logger.warning(f"Failed to create intro title: {e}")
+                
+                # Tagline
+                try:
+                    tagline_clip = TextClip(
+                        tagline,
+                        fontsize=min(40, video_size[0] // TAGLINE_FONT_SIZE_RATIO),
+                        color='white',
+                        font=Config.SUBTITLE_FONT,
+                        method='caption',
+                        size=(video_size[0] * 0.7, None),
+                        align='center'
+                    )
+                    tagline_clip = tagline_clip.set_position(('center', 0.50), relative=True)
+                    tagline_clip = tagline_clip.set_duration(duration)
+                    tagline_clip = tagline_clip.crossfadein(0.7).crossfadeout(0.3)
+                    overlay_clips.append(tagline_clip)
+                except Exception as e:
+                    logger.warning(f"Failed to create intro tagline: {e}")
             
             # Create composite
             intro_composite = CompositeVideoClip(overlay_clips)
             
-            # Attach audio if provided
+            # Attach audio if provided (voice-over determines duration)
             if audio_clip is not None:
                 try:
-                    # Ensure audio matches duration
-                    if audio_clip.duration > duration:
-                        audio_clip = audio_clip.subclip(0, duration)
                     intro_composite = intro_composite.set_audio(audio_clip)
                     logger.info(f"Attached voice-over audio to intro ({audio_clip.duration:.2f}s)")
                 except Exception as e:
@@ -580,8 +636,113 @@ class VideoRenderer:
             
         except Exception as e:
             logger.error(f"Intro card generation failed: {e}")
-            # Fallback: simple black clip
             return ColorClip(size=video_size, color=(0, 0, 0), duration=duration)
+    
+    def _create_intro_card_layers(self, intro_card: dict, video_size: tuple[int, int], duration: float) -> list:
+        """
+        Create multi-layer text clips for the intro card.
+        
+        Layout (inspired by high-performing real estate video covers):
+        - Headline: Large yellow text (location + community name)
+        - Specs: Medium white text (size + layout)
+        - Highlights: Stacked yellow tags (3 key selling points)
+        
+        Args:
+            intro_card: Dict with headline, specs, highlights
+            video_size: Video resolution
+            duration: Clip duration
+        
+        Returns:
+            List of TextClip objects
+        """
+        clips = []
+        
+        headline = intro_card.get('headline', '')
+        specs = intro_card.get('specs', '')
+        highlights = intro_card.get('highlights', [])
+        
+        # Color scheme (inspired by high-converting covers)
+        HEADLINE_COLOR = '#FFD700'  # Gold/Yellow - eye-catching
+        SPECS_COLOR = '#FFFFFF'     # White
+        HIGHLIGHT_COLOR = '#FFE135' # Bright yellow
+        STROKE_COLOR = '#000000'    # Black stroke for readability
+        
+        # Calculate positions (right-aligned, stacked vertically)
+        # Layout: headline at ~25%, specs at ~38%, highlights starting at ~50%
+        y_headline = 0.25
+        y_specs = 0.38
+        y_highlight_start = 0.50
+        highlight_spacing = 0.08  # Vertical spacing between highlight tags
+        
+        # Headline - Large, bold, yellow
+        if headline:
+            try:
+                headline_clip = TextClip(
+                    headline,
+                    fontsize=min(72, video_size[0] // 10),
+                    color=HEADLINE_COLOR,
+                    font=Config.SUBTITLE_FONT,
+                    stroke_color=STROKE_COLOR,
+                    stroke_width=3,
+                    method='caption',
+                    size=(video_size[0] * 0.85, None),
+                    align='center'
+                )
+                headline_clip = headline_clip.set_position(('center', y_headline), relative=True)
+                headline_clip = headline_clip.set_duration(duration)
+                headline_clip = headline_clip.crossfadein(0.3).crossfadeout(0.2)
+                clips.append(headline_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create headline clip: {e}")
+        
+        # Specs - Medium, white
+        if specs:
+            try:
+                specs_clip = TextClip(
+                    specs,
+                    fontsize=min(48, video_size[0] // 15),
+                    color=SPECS_COLOR,
+                    font=Config.SUBTITLE_FONT,
+                    stroke_color=STROKE_COLOR,
+                    stroke_width=2,
+                    method='caption',
+                    size=(video_size[0] * 0.8, None),
+                    align='center'
+                )
+                specs_clip = specs_clip.set_position(('center', y_specs), relative=True)
+                specs_clip = specs_clip.set_duration(duration)
+                specs_clip = specs_clip.crossfadein(0.4).crossfadeout(0.2)
+                clips.append(specs_clip)
+            except Exception as e:
+                logger.warning(f"Failed to create specs clip: {e}")
+        
+        # Highlights - Stacked yellow tags
+        if highlights and isinstance(highlights, list):
+            for i, highlight in enumerate(highlights[:3]):  # Max 3 highlights
+                if not highlight:
+                    continue
+                try:
+                    y_pos = y_highlight_start + (i * highlight_spacing)
+                    highlight_clip = TextClip(
+                        f"★ {highlight}",  # Add star prefix for visual appeal
+                        fontsize=min(40, video_size[0] // 18),
+                        color=HIGHLIGHT_COLOR,
+                        font=Config.SUBTITLE_FONT,
+                        stroke_color=STROKE_COLOR,
+                        stroke_width=2,
+                        method='caption',
+                        size=(video_size[0] * 0.6, None),
+                        align='center'
+                    )
+                    highlight_clip = highlight_clip.set_position(('center', y_pos), relative=True)
+                    highlight_clip = highlight_clip.set_duration(duration)
+                    # Staggered fade-in for visual interest
+                    highlight_clip = highlight_clip.crossfadein(0.3 + i * 0.15).crossfadeout(0.2)
+                    clips.append(highlight_clip)
+                except Exception as e:
+                    logger.warning(f"Failed to create highlight clip {i}: {e}")
+        
+        return clips
     
     def _generate_outro_cta(self, house_info: dict, script_segments: list) -> tuple[str, str]:
         """
@@ -699,6 +860,37 @@ class VideoRenderer:
             logger.error(f"Outro card generation failed: {e}")
             return ColorClip(size=video_size, color=(0, 0, 0), duration=duration)
 
+    def _is_valid_subtitle_text(self, text: str) -> bool:
+        """
+        Check if text contains valid subtitle content (Chinese or meaningful English).
+        Filters out pure numbers, pure punctuation, or empty strings.
+        """
+        if not text or not text.strip():
+            return False
+        
+        cleaned = text.strip()
+        
+        # Filter out pure numbers (like "22")
+        if cleaned.isdigit():
+            return False
+        
+        # Filter out pure punctuation or special characters
+        import unicodedata
+        has_letter = False
+        for char in cleaned:
+            cat = unicodedata.category(char)
+            # Lo = Letter, other (includes CJK); L* = Letters
+            if cat.startswith('L'):
+                has_letter = True
+                break
+        
+        if not has_letter:
+            return False
+        
+        # Minimum length requirement (at least 2 meaningful characters)
+        letter_count = sum(1 for c in cleaned if unicodedata.category(c).startswith('L'))
+        return letter_count >= 2
+
     def _generate_subtitle_clips(self, script_segments: list, video_size: tuple[int, int], time_offset: float = 0.0) -> list:
         """
         Generate subtitle TextClip objects from script segments.
@@ -750,15 +942,36 @@ class VideoRenderer:
                 current_time += duration
                 continue
             
-            # Extract key phrases for subtitle
+            # Extract key phrases for subtitle - try multiple sentences if first is invalid
             sentences = re.split(r'[。！？]', text)
-            key_phrase = sentences[0].strip() if sentences else text
+            key_phrase = ''
+            for sentence in sentences:
+                candidate = sentence.strip()
+                if self._is_valid_subtitle_text(candidate):
+                    key_phrase = candidate
+                    break
             
-            # Limit subtitle length for readability
+            # If no valid sentence found, try the full text
+            if not key_phrase and self._is_valid_subtitle_text(text):
+                key_phrase = text
+            
+            # Skip if still no valid subtitle content
+            if not key_phrase:
+                logger.debug(f"Skipping subtitle for segment {idx}: no valid text content")
+                current_time += duration
+                continue
+            
+            # Limit subtitle length for readability (use Chinese ellipsis)
             if len(key_phrase) > SUBTITLE_MAX_LENGTH:
-                key_phrase = key_phrase[:SUBTITLE_MAX_LENGTH] + '...'
+                key_phrase = key_phrase[:SUBTITLE_MAX_LENGTH] + '……'
             
             try:
+                # Final validation before rendering
+                if not self._is_valid_subtitle_text(key_phrase):
+                    logger.debug(f"Skipping invalid subtitle content for segment {idx}: '{key_phrase[:20]}'")
+                    current_time += duration
+                    continue
+                
                 # Create text clip
                 txt_clip = TextClip(
                     key_phrase,
@@ -784,6 +997,17 @@ class VideoRenderer:
                 positioned = positioned.crossfadein(0.3).crossfadeout(0.3)
                 
                 subtitle_clips.append(positioned)
+                
+                logger.debug(
+                    f"Created subtitle for segment {idx}",
+                    extra={
+                        "event": "subtitle.clip.created",
+                        "segment_idx": idx,
+                        "text_preview": key_phrase[:30],
+                        "start_time": current_time,
+                        "duration": show_duration
+                    }
+                )
                 
             except Exception as e:
                 logger.warning(f"Failed to create subtitle for segment {idx}: {e}")
@@ -1023,7 +1247,128 @@ class VideoRenderer:
         
         return sfx_clips
 
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None, intro_text: str = None) -> str:
+    def _select_opening_highlight_shot(self, timeline_assets: list, script_segments: list = None) -> dict | None:
+        """
+        Select the best highlight shot for opening hook (first 3 seconds).
+        
+        Algorithm:
+        1. Filter candidates with shock_score >= 8
+        2. Priority ranking:
+           - P0: Emotion="惊艳" (stunning views/features)
+           - P1: Super large space (客厅>40㎡, 主卧>25㎡)
+           - P2: Unique design (island counter, walk-in closet, terrace)
+        3. Extract the most impactful 1-3 seconds from selected segment
+        4. Mark segment as "used_in_hook" to avoid duplication
+        
+        Returns:
+            dict with keys: source_asset, extract_start, extract_duration, segment_index
+            or None if no suitable highlight found
+        """
+        if not timeline_assets:
+            return None
+        
+        # Extract segment metadata from script_segments if available
+        segment_metadata = {}
+        if script_segments:
+            for idx, seg in enumerate(script_segments):
+                asset_id = seg.get('asset_id')
+                if asset_id:
+                    segment_metadata[asset_id] = {
+                        'shock_score': seg.get('shock_score', 0),
+                        'emotion': seg.get('emotion', ''),
+                        'features': seg.get('features', ''),
+                        'segment_index': idx
+                    }
+        
+        # Build candidates list
+        candidates = []
+        for idx, asset in enumerate(timeline_assets):
+            asset_id = asset.get('id')
+            
+            # Get shock_score from metadata or asset itself
+            shock_score = 0
+            emotion = ''
+            features = ''
+            
+            if asset_id in segment_metadata:
+                meta = segment_metadata[asset_id]
+                shock_score = meta.get('shock_score', 0)
+                emotion = meta.get('emotion', '')
+                features = meta.get('features', '')
+            else:
+                # Fallback: try to get from asset directly
+                shock_score = asset.get('shock_score', 0)
+                emotion = asset.get('emotion', '')
+                features = asset.get('features', '')
+            
+            # Filter: shock_score >= 8
+            if shock_score >= 8:
+                # Calculate priority score
+                priority = 0
+                if emotion == '惊艳':
+                    priority = 100  # P0: Stunning emotion
+                elif '超大' in features or '270' in features or '江景' in features:
+                    priority = 80   # P1: Spectacular views/space
+                elif '衣帽间' in features or '岛台' in features or '露台' in features:
+                    priority = 60   # P2: Unique design features
+                else:
+                    priority = shock_score * 5  # Base on shock_score
+                
+                candidates.append({
+                    'asset': asset,
+                    'asset_index': idx,
+                    'shock_score': shock_score,
+                    'emotion': emotion,
+                    'features': features,
+                    'priority': priority
+                })
+        
+        if not candidates:
+            logger.info("No high-shock segments (score>=8) found for opening hook")
+            return None
+        
+        # Sort by priority (highest first), then by shock_score, then by position (later is better for suspense)
+        candidates.sort(key=lambda c: (c['priority'], c['shock_score'], c['asset_index']), reverse=True)
+        
+        best = candidates[0]
+        best_asset = best['asset']
+        asset_duration = float(best_asset.get('duration', 0))
+        
+        # Extract optimal clip duration (2-3 seconds for hook)
+        hook_duration = min(3.0, max(2.0, asset_duration))
+        
+        # Extract from the most visually impactful part (usually middle or start)
+        # For stunning views, start from beginning; for reveals, use middle
+        if best['emotion'] == '惊艳' or '景观' in best['features']:
+            extract_start = 0.0  # Immediate visual impact
+        else:
+            # Use middle section for dramatic reveal
+            extract_start = max(0, (asset_duration - hook_duration) / 2)
+        
+        result = {
+            'source_asset': best_asset,
+            'extract_start': extract_start,
+            'extract_duration': min(hook_duration, asset_duration - extract_start),
+            'segment_index': best['asset_index'],
+            'shock_score': best['shock_score'],
+            'emotion': best['emotion']
+        }
+        
+        logger.info(
+            f"Selected highlight shot for opening hook",
+            extra={
+                "event": "opening_hook.highlight_selected",
+                "asset_id": best_asset.get('id'),
+                "shock_score": best['shock_score'],
+                "emotion": best['emotion'],
+                "extract_start": extract_start,
+                "extract_duration": result['extract_duration']
+            }
+        )
+        
+        return result
+    
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None, intro_text: str = None, intro_card: dict = None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
@@ -1032,6 +1377,7 @@ class VideoRenderer:
         house_info: optional house information for intelligent AI enhancement
         audio_gen: optional AudioGenerator instance for intro voice generation
         intro_text: optional user-edited intro voice-over text (takes precedence over auto-generation)
+        intro_card: optional structured intro card data with headline, specs, highlights
         """
         final_clips = []
         temp_files_to_clean = []
@@ -1146,43 +1492,67 @@ class VideoRenderer:
                         # Video is longer -> Cut video
                         clip = clip.subclip(0, audio_dur)
                     else:
-                        # Video is shorter -> Boomerang Extend
-                        # Create a boomerang effect: Forward -> Backward -> Forward ...
+                        # Video is shorter -> Use slow motion + last frame freeze
+                        # This is more natural than boomerang (forward-backward looping)
                         
-                        # Fix: trim a bit from the end to avoid EOF errors during time_mirror (reverse)
-                        # Reading exactly at duration often fails in FFMPEG
-                        safe_dur = max(0.1, clip.duration - 0.1)
-                        if safe_dur < clip.duration:
-                            clip = clip.subclip(0, safe_dur)
-                            video_dur = clip.duration
-
-                        extended_clips = [clip]
-                        current_len = video_dur
-                        direction = -1 # Next is backward
+                        gap = audio_dur - video_dur
                         
-                        # Limit loop to reasonable amount (e.g. max 30s)
-                        while current_len < audio_dur and current_len < 60:
-                            if direction == -1:
-                                # Reverse
-                                next_part = clip.fx(vfx.time_mirror)
-                            else:
-                                next_part = clip
+                        # Strategy: 
+                        # 1. If gap is small (<30% of video), use gentle slow motion
+                        # 2. If gap is larger, use slow motion + last frame freeze
+                        
+                        if gap <= video_dur * 0.3:
+                            # Small gap: gentle slow motion (0.77x - 1.0x)
+                            speed_factor = video_dur / audio_dur
+                            speed_factor = max(0.77, speed_factor)  # Don't go slower than 0.77x
                             
-                            extended_clips.append(next_part)
-                            current_len += video_dur
-                            direction *= -1
-                        
-                        # Concatenate loop parts
-                        if len(extended_clips) > 1:
-                            full_extended = concatenate_videoclips(extended_clips)
+                            try:
+                                clip = clip.fx(vfx.speedx, speed_factor)
+                                # Trim to exact duration
+                                if clip.duration > audio_dur:
+                                    clip = clip.subclip(0, audio_dur)
+                                logger.info(
+                                    f"Applied slow motion to extend video",
+                                    extra={
+                                        "event": "video.extend.slowmo",
+                                        "asset_id": asset_id,
+                                        "speed_factor": speed_factor,
+                                        "original_duration": video_dur,
+                                        "target_duration": audio_dur
+                                    }
+                                )
+                            except Exception as e:
+                                logger.warning(f"Slow motion failed, using last frame freeze: {e}")
+                                clip = self._extend_with_last_frame(clip, audio_dur)
                         else:
-                            full_extended = clip
-                            
-                        # Trim to exact audio length
-                        if full_extended.duration > audio_dur:
-                            clip = full_extended.subclip(0, audio_dur)
-                        else:
-                            clip = full_extended
+                            # Larger gap: slow motion (0.85x) + last frame freeze for remainder
+                            try:
+                                # Apply moderate slow motion first
+                                slow_factor = 0.85
+                                slowed_clip = clip.fx(vfx.speedx, slow_factor)
+                                slowed_dur = slowed_clip.duration
+                                
+                                if slowed_dur >= audio_dur:
+                                    # Slow motion alone is enough
+                                    clip = slowed_clip.subclip(0, audio_dur)
+                                else:
+                                    # Need last frame freeze for the rest
+                                    remaining = audio_dur - slowed_dur
+                                    clip = self._extend_with_last_frame(slowed_clip, audio_dur)
+                                
+                                logger.info(
+                                    f"Applied slow motion + freeze to extend video",
+                                    extra={
+                                        "event": "video.extend.slowmo_freeze",
+                                        "asset_id": asset_id,
+                                        "slow_factor": slow_factor,
+                                        "original_duration": video_dur,
+                                        "target_duration": audio_dur
+                                    }
+                                )
+                            except Exception as e:
+                                logger.warning(f"Slow motion + freeze failed, using simple freeze: {e}")
+                                clip = self._extend_with_last_frame(clip, audio_dur)
                     
                     # Attach Audio
                     clip = clip.set_audio(audio_clip)
@@ -1265,19 +1635,20 @@ class VideoRenderer:
                             logger.warning(f"Failed to generate intro voice, using static intro: {e}")
                             intro_audio_clip = None
                     
-                    intro_card = self._create_intro_card(
+                    intro_clip = self._create_intro_card(
                         house_info or {}, 
                         script_segments or [], 
                         video_size, 
                         duration=intro_duration,
                         audio_clip=intro_audio_clip,
-                        background_video=first_video_clip
+                        background_video=first_video_clip,
+                        intro_card=intro_card  # Pass structured intro card data
                     )
-                    all_video_parts.append(intro_card)
+                    all_video_parts.append(intro_clip)
                     logger.info(f"Intro card added successfully ({intro_duration:.2f}s, voice={intro_audio_clip is not None})")
                 except Exception as e:
                     logger.warning(f"Failed to add intro card: {e}")
-                    intro_card = None
+                    intro_clip = None
             
             # Main video content
             all_video_parts.append(main_video)
@@ -1303,9 +1674,9 @@ class VideoRenderer:
             
             # Calculate actual intro duration for subtitle offset
             actual_intro_duration = 0.0
-            if intro_card is not None:
+            if intro_clip is not None:
                 try:
-                    actual_intro_duration = intro_card.duration
+                    actual_intro_duration = intro_clip.duration
                 except Exception:
                     actual_intro_duration = Config.INTRO_DURATION if Config.INTRO_ENABLED else 0.0
 
@@ -1424,7 +1795,7 @@ class VideoRenderer:
                     pass
             
             # Cleanup intro/outro cards
-            for card in [intro_card, outro_card]:
+            for card in [intro_clip, outro_card]:
                 if card is not None:
                     try:
                         card.close()

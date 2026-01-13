@@ -521,15 +521,57 @@ def _classify_tts_exception(e: Exception) -> dict:
     return {"tts_error_category": "unknown", "tts_error_detail": e.__class__.__name__}
 
 def _text_to_emotional_ssml(text: str) -> str:
+    """
+    Enhanced SSML generation with official CosyVoice tags.
+    
+    Supported tags (based on official docs):
+    - <speak rate="0.5-2.0">: Global speech rate control
+    - <break time="ms/s">: Insert pause
+    - <phoneme ph="pinyin">: Polyphone disambiguation
+    - <say-as interpret-as="...">: Number/date reading method
+    - <sub alias="replacement">: Text substitution
+    - <p> / <s>: Paragraph/sentence boundary
+    
+    Design doc reference: .qoder/quests/ai-video-editing-system-design.md Section 3.5.1
+    """
     raw = (text or "").strip()
     if not raw:
         return "<speak></speak>"
 
+    # 1. Basic text cleaning
     raw = raw.replace("\r\n", "\n").replace("\r", "\n")
     raw = re.sub(r"[\x00-\x08\x0B-\x1F\x7F]", "", raw)
     raw = re.sub(r"[ \t]+", " ", raw)
     raw = raw.replace("……", "…").replace("......", "…").replace(".....", "…").replace("....", "…").replace("...", "…")
 
+    # 2. Polyphone correction (before XML escaping)
+    # 常见多音字词典（房产领域）
+    polyphone_dict = {
+        "银行": "银<phoneme ph=\"hang2\">行</phoneme>",
+        "重庆": "<phoneme ph=\"chong2\">重</phoneme>庆",
+        "地段": "<phoneme ph=\"duan4\">地段</phoneme>",
+        "地方": "<phoneme ph=\"fang1\">地方</phoneme>",
+    }
+    for word, ssml in polyphone_dict.items():
+        if word in raw:
+            raw = raw.replace(word, f"__POLY_{word}__")
+    
+    # 3. Number intelligent processing (before escaping)
+    # 价格：358万 → <say-as interpret-as="cardinal">358</say-as>万
+    raw = re.sub(r"(\d+)万", r"__NUM_\1万__", raw)
+    # 面积：89㎡ → <say-as interpret-as="cardinal">89</say-as>平米
+    raw = re.sub(r"(\d+)㎡", r"__NUM_\1㎡__", raw)
+    # 楼层：28楼 → <say-as interpret-as="cardinal">28</say-as>楼
+    raw = re.sub(r"(\d+)楼", r"__NUM_\1楼__", raw)
+    
+    # 4. Emotion pause markers (before escaping)
+    # 情绪关键词：真的、居然、绝了、爱了 → 前加停顿
+    emotion_keywords = ["真的", "居然", "竟然", "绝了", "爱了", "哎", "哇", "噢"]
+    for keyword in emotion_keywords:
+        if keyword in raw:
+            raw = raw.replace(keyword, f"__EMO_{keyword}__")
+    
+    # 5. Add natural pauses after punctuation
     raw = raw.replace("，", "，__AI_BRK_180__")
     raw = raw.replace(",", "，__AI_BRK_180__")
     raw = raw.replace("。", "。__AI_BRK_320__")
@@ -544,7 +586,41 @@ def _text_to_emotional_ssml(text: str) -> str:
     raw = raw.replace(";", "；__AI_BRK_240__")
     raw = raw.replace("…", "__AI_BRK_650__")
 
+    # 6. XML escape
     escaped = _xml_escape(raw, quote=True)
+    
+    # 7. Restore polyphones with SSML
+    for word, ssml in polyphone_dict.items():
+        escaped = escaped.replace(f"__POLY_{word}__", ssml)
+    
+    # 8. Restore numbers with say-as
+    # 358万 → <say-as interpret-as="cardinal">358</say-as>万
+    escaped = re.sub(
+        r"__NUM_(\d+)万__",
+        r'<say-as interpret-as="cardinal">\1</say-as>万',
+        escaped
+    )
+    # 89㎡ → <say-as interpret-as="cardinal">89</say-as>平米
+    escaped = re.sub(
+        r"__NUM_(\d+)㎡__",
+        r'<say-as interpret-as="cardinal">\1</say-as>平米',
+        escaped
+    )
+    # 28楼 → <say-as interpret-as="cardinal">28</say-as>楼
+    escaped = re.sub(
+        r"__NUM_(\d+)楼__",
+        r'<say-as interpret-as="cardinal">\1</say-as>楼',
+        escaped
+    )
+    
+    # 9. Restore emotion pauses
+    for keyword in emotion_keywords:
+        escaped = escaped.replace(
+            f"__EMO_{keyword}__",
+            f'<break time="200ms"/>{keyword}'
+        )
+    
+    # 10. Restore standard break tags
     escaped = escaped.replace("__AI_BRK_180__", "<break time=\"180ms\"/>")
     escaped = escaped.replace("__AI_BRK_320__", "<break time=\"320ms\"/>")
     escaped = escaped.replace("__AI_BRK_280__", "<break time=\"280ms\"/>")
@@ -552,6 +628,7 @@ def _text_to_emotional_ssml(text: str) -> str:
     escaped = escaped.replace("__AI_BRK_240__", "<break time=\"240ms\"/>")
     escaped = escaped.replace("__AI_BRK_650__", "<break time=\"650ms\"/>")
 
+    # 11. Wrap in <speak> tag (without rate control by default)
     return f"<speak>{escaped}</speak>"
 
 def _is_invalid_parameter_error(err: Exception) -> bool:
@@ -729,6 +806,12 @@ class AudioGenerator:
     def generate_aligned_audio_segments(self, segments: list, output_dir: str) -> dict:
         """
         Generate audio segments aligned with video duration.
+        
+        Strategy for duration matching (prioritize natural speech):
+        1. If audio is close to video duration (±0.5s): use as-is
+        2. If audio > video: speed up (max 1.25x to avoid unnatural fast speech)
+        3. If audio < video: slow down (min 0.85x for natural pace), then pad with silence
+        
         segments: list of dict, each containing 'text', 'duration', 'asset_id'
         Returns: dict mapping asset_id to audio_file_path
         """
@@ -736,6 +819,10 @@ class AudioGenerator:
             os.makedirs(output_dir)
             
         result_map = {}
+        
+        # Speech rate limits for natural sounding audio
+        MIN_SPEECH_RATE = 0.85  # Slower = more relaxed, warm tone
+        MAX_SPEECH_RATE = 1.25  # Faster = still intelligible
         
         # Pre-check engine support
         use_v2 = Config.TTS_ENGINE in {"cosyvoice", "tts_v2"}
@@ -774,6 +861,7 @@ class AudioGenerator:
             used_ssml = False
 
             try:
+                # Step 1: Generate audio at normal speed first
                 try:
                     used_ssml = _synthesize_text_to_mp3(
                         self,
@@ -820,28 +908,116 @@ class AudioGenerator:
                 audio_len = _get_audio_duration_sec(temp_base)
                 diff = video_duration - audio_len
 
+                # Step 2: Determine optimal speech rate adjustment
                 if abs(diff) < 0.5:
+                    # Close enough, use as-is
                     os.replace(temp_base, final_path)
+                    logger.debug(
+                        f"Audio duration matched for {asset_id}",
+                        extra={
+                            "event": "tts.duration.matched",
+                            "asset_id": asset_id,
+                            "audio_duration": audio_len,
+                            "video_duration": video_duration,
+                            "diff": diff
+                        }
+                    )
                 elif diff > 0:
-                    silence_path = os.path.join(output_dir, f"{asset_id}_pad.mp3")
-                    try:
-                        self._generate_silence(diff, silence_path)
-                        _ffmpeg_concat_mp3([temp_base, silence_path], final_path)
-                    finally:
-                        if os.path.exists(temp_base):
-                            try:
+                    # Audio is SHORTER than video - try slowing down first
+                    target_rate = audio_len / video_duration  # e.g., 4s audio / 5s video = 0.8
+                    
+                    if target_rate >= MIN_SPEECH_RATE:
+                        # Can achieve with slower speech (more natural, warm tone)
+                        logger.info(
+                            f"Slowing speech for {asset_id}: rate={target_rate:.2f}",
+                            extra={
+                                "event": "tts.speech_rate.slow",
+                                "asset_id": asset_id,
+                                "target_rate": target_rate,
+                                "audio_duration": audio_len,
+                                "video_duration": video_duration
+                            }
+                        )
+                        try:
+                            _synthesize_text_to_mp3(
+                                self,
+                                SpeechSynthesizerV2,
+                                AudioFormat,
+                                model=model,
+                                voice=voice,
+                                text=text,
+                                output_path=final_path,
+                                prefer_ssml=bool(Config.TTS_ENABLE_SSML) and used_ssml,
+                                speech_rate=target_rate,
+                                asset_id=asset_id,
+                            )
+                            if os.path.exists(temp_base):
                                 os.remove(temp_base)
-                            except Exception:
-                                pass
-                        if os.path.exists(silence_path):
+                        except Exception:
+                            # Fallback: use original + silence padding
+                            self._pad_with_silence(temp_base, final_path, diff, output_dir, asset_id)
+                    else:
+                        # Need more than slowest rate allows - slow to min then pad
+                        logger.info(
+                            f"Slowing to min rate + padding for {asset_id}",
+                            extra={
+                                "event": "tts.speech_rate.slow_and_pad",
+                                "asset_id": asset_id,
+                                "min_rate": MIN_SPEECH_RATE,
+                                "audio_duration": audio_len,
+                                "video_duration": video_duration
+                            }
+                        )
+                        # Calculate expected duration at min rate
+                        expected_slow_duration = audio_len / MIN_SPEECH_RATE
+                        remaining_gap = video_duration - expected_slow_duration
+                        
+                        if remaining_gap > 0.3:
+                            # Regenerate at slower rate, then pad
                             try:
-                                os.remove(silence_path)
+                                slow_path = os.path.join(output_dir, f"{asset_id}_slow.mp3")
+                                _synthesize_text_to_mp3(
+                                    self,
+                                    SpeechSynthesizerV2,
+                                    AudioFormat,
+                                    model=model,
+                                    voice=voice,
+                                    text=text,
+                                    output_path=slow_path,
+                                    prefer_ssml=bool(Config.TTS_ENABLE_SSML) and used_ssml,
+                                    speech_rate=MIN_SPEECH_RATE,
+                                    asset_id=asset_id,
+                                )
+                                actual_slow_len = _get_audio_duration_sec(slow_path)
+                                actual_gap = video_duration - actual_slow_len
+                                if actual_gap > 0.1:
+                                    self._pad_with_silence(slow_path, final_path, actual_gap, output_dir, asset_id)
+                                else:
+                                    os.replace(slow_path, final_path)
+                                if os.path.exists(temp_base):
+                                    os.remove(temp_base)
                             except Exception:
-                                pass
+                                # Fallback to original + full padding
+                                self._pad_with_silence(temp_base, final_path, diff, output_dir, asset_id)
+                        else:
+                            # Gap too small to bother with re-generation
+                            self._pad_with_silence(temp_base, final_path, diff, output_dir, asset_id)
                 else:
+                    # Audio is LONGER than video - speed up (existing logic)
                     safe_video_duration = max(video_duration, 0.1)
                     ratio = audio_len / safe_video_duration
-                    target_rate = min(ratio, 1.25)
+                    target_rate = min(ratio, MAX_SPEECH_RATE)
+                    
+                    logger.info(
+                        f"Speeding up speech for {asset_id}: rate={target_rate:.2f}",
+                        extra={
+                            "event": "tts.speech_rate.fast",
+                            "asset_id": asset_id,
+                            "target_rate": target_rate,
+                            "audio_duration": audio_len,
+                            "video_duration": video_duration
+                        }
+                    )
                     try:
                         _synthesize_text_to_mp3(
                             self,
@@ -908,6 +1084,24 @@ class AudioGenerator:
             result_map[asset_id] = final_path
             
         return result_map
+
+    def _pad_with_silence(self, audio_path: str, output_path: str, silence_duration: float, output_dir: str, asset_id: str):
+        """Helper to pad audio with silence at the end."""
+        silence_path = os.path.join(output_dir, f"{asset_id}_pad.mp3")
+        try:
+            self._generate_silence(silence_duration, silence_path)
+            _ffmpeg_concat_mp3([audio_path, silence_path], output_path)
+        finally:
+            if os.path.exists(audio_path) and audio_path != output_path:
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+            if os.path.exists(silence_path):
+                try:
+                    os.remove(silence_path)
+                except Exception:
+                    pass
 
     def _generate_silence(self, duration: float, output_path: str):
         cmd = [

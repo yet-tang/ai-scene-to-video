@@ -47,26 +47,59 @@ class SceneDetector:
         """
         Group shots into semantic scenes using Qwen-VL.
         shot_frames: List of {"start": float, "end": float, "image": "path/to/img"}
+        
+        Enhanced with shock_score and emotion tags for viral video optimization.
         """
         prompt = """
-        这是一组连续的视频镜头关键帧，每个镜头都有时间范围。
-        任务：请分析这些画面，将属于同一场景（例如同一个客厅的不同角度、同一房间的连续镜头）的镜头合并。
-        1. 合并相邻且语义相同的镜头。
-        2. 识别合并后的场景类型（仅限：小区门头, 小区环境, 客厅, 餐厅, 厨房, 卧室, 卫生间, 阳台, 走廊, 其他）。
-        3. 描述该场景的关键特征。
+        你是10年经验的房产视频分析师，专门为短视频剪辑提供专业洞察。
         
-        请以 JSON 格式返回合并后的分段列表：
+        任务：分析这组连续的视频镜头关键帧，将属于同一场景的镜头合并，并输出结构化分段数据。
+        
+        分析维度：
+        1. 合并相邻且语义相同的镜头（例如同一客厅的不同角度）
+        2. 识别合并后的场景类型（仅限：小区门头, 小区环境, 客厅, 餐厅, 厨房, 卧室, 卫生间, 阳台, 走廊, 其他）
+        3. 描述该场景的关键特征（采光、材质、空间感等）
+        4. 视觉亮点标签（从以下选择0-3个）：采光、景观、材质、空间感、功能亮点
+        5. 情绪标签（仅选1个）：惊艳、治愈、温馨、高级、遗憾、普通
+        6. 震撼度评分（1-10分）：
+           - 10分：极致景观（270°江景、顶层露台）、超大空间（客厅>50㎡）
+           - 8-9分：高级材质（大理石、实木）、独特设计（岛台、衣帽间）
+           - 6-7分：良好采光、规整户型、新装修
+           - 4-5分：普通场景但功能完整
+           - 1-3分：模糊、杂乱、无亮点
+        7. 适合节奏（仅选1个）：快切、慢镜、定格
+        8. 是否适合作为开场（potential_hook: true/false）：仅限震撼度≥8的片段
+        
+        情绪标签逻辑：
+        - 惊艳：意外的高配（超出总价预期的配置）
+        - 治愈：阳光、绿植、温馨色调
+        - 高级：极简设计、品质材料、留白
+        - 遗憾：明显缺陷（采光差、老旧）
+        
+        请以 JSON 格式返回合并后的分段列表（不要 markdown 代码块）：
         {
           "segments": [
             {
               "start_sec": 0.0,
               "end_sec": 12.5,
               "scene": "客厅",
-              "features": "采光好，大落地窗",
+              "features": "270度落地窗，南向采光爆棚，实木地板",
+              "highlight_tags": ["采光", "景观", "材质"],
+              "emotion": "惊艳",
+              "shock_score": 9,
+              "suggested_pace": "慢镜",
+              "potential_hook": true,
               "score": 0.95
             }
-          ]
+          ],
+          "overall_quality": 8.5,
+          "top_3_highlights": ["270°江景", "主卧超大衣帽间", "独立岛台厨房"]
         }
+        
+        关键约束：
+        - 片段必须按时间顺序且不重叠
+        - shock_score必须基于客观视觉元素，不主观夸大
+        - potential_hook=true的片段不超过2个
         """
         
         content = []
@@ -266,21 +299,125 @@ class SceneDetector:
         raise Exception(f"Model call failed: {response.message}")
 
     def analyze_video_segments(self, video_url: str, max_segments: int = 12) -> str:
+        """
+        Enhanced video segmentation with shock_score and emotion tags.
+            
+        Returns JSON with segments containing:
+        - Basic info: start_sec, end_sec, scene, features, score
+        - Enhanced: shock_score, emotion, highlight_tags, suggested_pace, potential_hook
+        - Annotations: dynamic labels for key information
+        """
         prompt = f"""
-        你将看到一段房产视频。请完成“智能分段”：
-        - 按内容语义切分成若干连续片段，每个片段尽量对应一个房间/场景。
-        - 对每个片段输出：start_sec, end_sec, scene（仅限：小区门头, 小区环境, 客厅, 餐厅, 厨房, 卧室, 卫生间, 阳台, 走廊, 其他）, features, score(0-1)。
-        - 片段需按时间顺序、且互不重叠；end_sec > start_sec；尽量覆盖整个视频。
-        - 片段数不超过 {int(max_segments)}。
-
-        只返回 JSON（不要 markdown）：
+        你是10年经验的房产视频分析师，专门为短视频剪辑提供专业洞察。
+            
+        任务：分析这段房产视频，完成"智能分段"并输出结构化数据。
+            
+        分析要求：
+        1. 按内容语义切分成若干连续片段，每个片段尽量对应一个房间/场景
+        2. 片段数不超过 {int(max_segments)}，按时间顺序、互不重叠
+        3. 对每个片段输出以下维度：
+            
+        基础维度：
+        - start_sec, end_sec: 时间范围
+        - scene: 场景类型（仅限：小区门头, 小区环境, 客厅, 餐厅, 厨房, 卧室, 卫生间, 阳台, 走廊, 其他）
+        - features: 关键特征描述（客观、具体）
+        - score: 识别置信度（0-1）
+            
+        爆款分析维度：
+        - shock_score: 震撼度评分（1-10分）
+          * 10分：极致景观（270°江景、顶层露台）、超大空间（客厅>50㎡）
+          * 8-9分：高级材质（大理石、实木）、独特设计（岛台、衣帽间）
+          * 6-7分：良好采光、规整户型、新装修
+          * 4-5分：普通场景但功能完整
+          * 1-3分：模糊、杂乱、无亮点
+        - emotion: 情绪标签（仅选1个）：惊艳、治愈、温馨、高级、遗憾、普通
+          * 惊艳：意外的高配（超出总价预期的配置）
+          * 治愈：阳光、绿植、温馨色调
+          * 高级：极简设计、品质材料、留白
+          * 遗憾：明显缺陷（采光差、老旧、异味）
+        - highlight_tags: 视觉亮点（从以下选择0-3个）：采光、景观、材质、空间感、功能亮点
+        - suggested_pace: 适合节奏（仅选1个）：快切、慢镜、定格
+        - potential_hook: 是否适合作为开场钩子（true/false，仅限shock_score≥8）
+            
+        动态标注维度（annotations）：
+        标注触发逻辑：
+        - 空间数据（面积>30㎡的房间）→ area_label
+        - 功能亮点（衣帽间、岛台、智能家居）→ feature_highlight
+        - 视野信息（江景、公园、学区）→ view_label
+        - 稀缺配置（地暖、新风、智能马桶）→ feature_highlight
+            
+        标注输出格式：
+        "annotations": [
+          {{
+            "timestamp": 15.3,
+            "type": "area_label",
+            "text": "主卧28㎡",
+            "position": "bottom_right"
+          }},
+          {{
+            "timestamp": 32.8,
+            "type": "feature_highlight",
+            "text": "270°景观阳台",
+            "position": "center",
+            "style": "arrow_point"
+          }}
+        ]
+            
+        输出格式（只返回 JSON，不要 markdown 代码块）：
         {{
           "segments": [
-            {{"start_sec": 0.0, "end_sec": 5.0, "scene": "小区门头", "features": "...", "score": 0.8}}
-          ]
+            {{
+              "start_sec": 0.0,
+              "end_sec": 5.0,
+              "scene": "小区门头",
+              "features": "现代化小区大门，保安岗亭",
+              "shock_score": 5,
+              "emotion": "普通",
+              "highlight_tags": [],
+              "suggested_pace": "快切",
+              "potential_hook": false,
+              "score": 0.8,
+              "annotations": []
+            }},
+            {{
+              "start_sec": 5.0,
+              "end_sec": 18.0,
+              "scene": "客厅",
+              "features": "270度落地窗，南向采光爆棚，实木地板，空间开阔",
+              "shock_score": 9,
+              "emotion": "惊艳",
+              "highlight_tags": ["采光", "景观", "材质"],
+              "suggested_pace": "慢镜",
+              "potential_hook": true,
+              "score": 0.95,
+              "annotations": [
+                {{
+                  "timestamp": 10.5,
+                  "type": "area_label",
+                  "text": "客厅45㎡",
+                  "position": "bottom_right"
+                }},
+                {{
+                  "timestamp": 15.0,
+                  "type": "view_label",
+                  "text": "270°江景",
+                  "position": "center",
+                  "style": "arrow_point"
+                }}
+              ]
+            }}
+          ],
+          "overall_quality": 8.5,
+          "top_3_highlights": ["270°江景客厅", "主卧带衣帽间", "独立岛台厨房"]
         }}
+            
+        关键约束：
+        - shock_score必须基于客观视觉元素，不主观夸大
+        - potential_hook=true的片段不超过2个
+        - annotations中的timestamp必须在对应segment的时间范围内
+        - 尽量覆盖整个视频，避免大段遗漏
         """
-
+    
         messages = [
             {
                 "role": "user",
@@ -290,7 +427,7 @@ class SceneDetector:
                 ],
             }
         ]
-
+    
         response = MultiModalConversation.call(model=Config.QWEN_VIDEO_MODEL, messages=messages)
         if response.status_code == HTTPStatus.OK:
             return self._content_to_text(response.output.choices[0].message.content)

@@ -12,12 +12,14 @@ ENV GIT_COMMIT=$GIT_COMMIT
 ENV BUILD_TIME=$BUILD_TIME
 
 # Install system dependencies for OpenCV, FFmpeg, ImageMagick, and fonts
+# IMPORTANT: fonts-noto-cjk provides Chinese/Japanese/Korean character support
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     ffmpeg \
     imagemagick \
     fonts-liberation \
     fonts-dejavu-core \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure ImageMagick security policy for MoviePy TextClip rendering
@@ -48,8 +50,9 @@ RUN for policy_file in /etc/ImageMagick-*/policy.xml; do \
 # Regenerate font cache for MoviePy/ImageMagick
 RUN fc-cache -f -v || true
 
-# Verify ImageMagick and font setup
+# Verify ImageMagick and font setup (including Chinese font)
 RUN convert -list font | head -20 || echo "Font listing not available"
+RUN echo "=== Chinese Font Check ===" && fc-list :lang=zh | head -5 || echo "No Chinese fonts found"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

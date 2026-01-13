@@ -3,12 +3,6 @@ version: '3.8'
 services:
   ai-scene-backend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-backend:${IMAGE_TAG:-latest}
-    build:
-      context: ./backend
-      args:
-        - IMAGE_TAG=${IMAGE_TAG:-latest}
-        - GIT_COMMIT=${GIT_COMMIT:-unknown}
-        - BUILD_TIME=${BUILD_TIME:-unknown}
     container_name: ai-scene-backend
     ports:
       - "8090:8090"
@@ -40,12 +34,6 @@ services:
 
   ai-scene-engine:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-engine:${IMAGE_TAG:-latest}
-    build:
-      context: ./engine
-      args:
-        - IMAGE_TAG=${IMAGE_TAG:-latest}
-        - GIT_COMMIT=${GIT_COMMIT:-unknown}
-        - BUILD_TIME=${BUILD_TIME:-unknown}
     container_name: ai-scene-engine
     environment:
       # Redis Connection (Same as backend)
@@ -55,6 +43,14 @@ services:
       - DB_DSN=${DB_DSN} 
       # AI Service Keys
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - GROK_API_KEY=${GROK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - VOLCENGINE_API_KEY=${VOLCENGINE_API_KEY:-}
+      # LLM Strategy Configuration
+      - LLM_COST_AWARE_ROUTING=${LLM_COST_AWARE_ROUTING:-true}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-3}
+      - LLM_RETRY_DELAY=${LLM_RETRY_DELAY:-1}
       - SMART_SPLIT_ENABLED=true
       - SMART_SPLIT_STRATEGY=hybrid
       - SMART_SPLIT_MIN_DURATION_SEC=10
@@ -97,14 +93,6 @@ services:
 
   ai-scene-frontend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-frontend:${IMAGE_TAG:-latest}
-    build:
-      context: ./frontend
-      args:
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
-        - VITE_API_KEY=${VITE_API_KEY}
-        - IMAGE_TAG=${IMAGE_TAG:-latest}
-        - GIT_COMMIT=${GIT_COMMIT:-unknown}
-        - BUILD_TIME=${BUILD_TIME:-unknown}
     environment:
       # Frontend build args are baked into the image during GitHub Actions build
       # These env vars are for runtime reference only (not used by Nginx)

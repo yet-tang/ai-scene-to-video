@@ -9,6 +9,7 @@ from config import Config
 import json
 import logging
 import psycopg2
+import re
 import tempfile
 import os
 import boto3
@@ -794,13 +795,52 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
 def generate_script_task(self, project_id: str, house_info: dict, timeline_data: list):
     """
     Background task to generate video script using LLM.
+    
+    Includes quality gate: Opening hook strength validation.
     """
     started = time.monotonic()
     try:
         # 1. Generate Script
         script_content = script_gen.generate_script(house_info, timeline_data)
 
-        # 2. Update Database
+        # 2. Quality Gate: Validate Opening Hook Strength
+        validation_result = _validate_opening_hook(script_content, house_info)
+        
+        if not validation_result['passed']:
+            logger.warning(
+                f"Opening hook validation failed: {validation_result['reason']}",
+                extra={
+                    "event": "script.hook_validation.failed",
+                    "project_id": project_id,
+                    "reason": validation_result['reason'],
+                    "retry_attempt": int(getattr(self.request, "retries", 0) or 0)
+                }
+            )
+            
+            # Retry script generation with enhanced feedback
+            if int(getattr(self.request, "retries", 0) or 0) < 2:
+                raise _retry_with_headers(
+                    self, 
+                    exc=Exception(f"Hook validation failed: {validation_result['reason']}"),
+                    countdown=1
+                )
+            else:
+                # Max retries reached, log warning but proceed
+                logger.warning(
+                    f"Max retries reached for hook validation, proceeding with current script",
+                    extra={"event": "script.hook_validation.max_retries", "project_id": project_id}
+                )
+        else:
+            logger.info(
+                f"Opening hook validation passed",
+                extra={
+                    "event": "script.hook_validation.passed",
+                    "project_id": project_id,
+                    "hook_strength": validation_result['strength']
+                }
+            )
+
+        # 3. Update Database
         conn = psycopg2.connect(Config.DB_DSN)
         try:
             with conn:
@@ -820,15 +860,99 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
         retries = int(getattr(self.request, "retries", 0) or 0)
         raise _retry_with_headers(self, exc=e, countdown=2 ** retries)
 
+def _validate_opening_hook(script_content: str, house_info: dict) -> dict:
+    """
+    Validate opening hook strength based on viral video formula.
+    
+    Quality criteria:
+    1. Must contain price (XXX万)
+    2. Must contain location/community (from house_info)
+    3. Must contain contrast/surprise element (居然/竟然/？)
+    
+    Returns:
+        dict with keys:
+        - passed: bool
+        - reason: str (if failed)
+        - strength: int (1-10, if passed)
+    """
+    try:
+        data = json.loads(script_content)
+        
+        # Extract intro_text or first segment as hook
+        hook_text = ""
+        if isinstance(data, dict):
+            # New format: use intro_card.headline or intro_text
+            intro_card = data.get('intro_card', {})
+            hook_text = intro_card.get('headline', '') if intro_card else data.get('intro_text', '')
+            
+            # Also check first segment if intro is missing
+            if not hook_text:
+                segments = data.get('segments', [])
+                if segments:
+                    hook_text = segments[0].get('text', '')
+        elif isinstance(data, list) and data:
+            # Old format: use first segment
+            hook_text = data[0].get('text', '')
+    except Exception:
+        # Fallback: use first 50 characters
+        hook_text = script_content[:50]
+    
+    if not hook_text:
+        return {'passed': False, 'reason': 'No hook text found'}
+    
+    # Validation criteria
+    has_price = bool(re.search(r'\d+万', hook_text))
+    
+    # Check location/community
+    has_location = False
+    community = house_info.get('community', '') or house_info.get('location', '')
+    if community:
+        has_location = community in hook_text
+    else:
+        # Fallback: check for common location patterns
+        has_location = bool(re.search(r'[\u4e00-\u9fa5]{2,}区|[\u4e00-\u9fa5]{2,}路|[\u4e00-\u9fa5]{2,}苑|[\u4e00-\u9fa5]{2,}城', hook_text))
+    
+    # Check contrast/surprise element
+    surprise_keywords = ['居然', '竟然', '？', '！', '绝了', '爱了', '谁能拒绝']
+    has_surprise = any(keyword in hook_text for keyword in surprise_keywords)
+    
+    # Calculate strength (1-10)
+    strength = 0
+    if has_price:
+        strength += 4
+    if has_location:
+        strength += 3
+    if has_surprise:
+        strength += 3
+    
+    # Minimum threshold: 7/10
+    if strength >= 7:
+        return {'passed': True, 'strength': strength}
+    else:
+        missing = []
+        if not has_price:
+            missing.append('价格')
+        if not has_location:
+            missing.append('位置')
+        if not has_surprise:
+            missing.append('反差/疑问')
+        
+        return {
+            'passed': False,
+            'reason': f"开场钩子缺少关键元素: {', '.join(missing)}（当前强度{strength}/10）",
+            'hook_text': hook_text[:50]
+        }
+
 def _parse_and_align_segments(project_id: str, script_content: str):
     """
     Fetch assets, parse script (JSON/Text), and prepare for audio generation.
     
     Returns:
-        Tuple of (segments, timeline_assets, intro_text)
+        Tuple of (segments, timeline_assets, intro_text, intro_card)
         - segments: List of dicts with text, duration, asset_id, oss_url
         - timeline_assets: List of asset metadata
         - intro_text: Opening voice-over text for intro (may be empty)
+        - intro_card: Structured intro card data (headline, specs, highlights) or None
     """
     # Fetch assets to get durations
     conn = psycopg2.connect(Config.DB_DSN)
@@ -862,14 +986,16 @@ def _parse_and_align_segments(project_id: str, script_content: str):
         
     segments = []
     intro_text = ""  # 片头开场白
+    intro_card = None  # 片头卡片结构化数据
     
     try:
         # Try parsing as JSON
         data = json.loads(script_content)
         
-        # New format: { "intro_text": "...", "segments": [...] }
+        # New format: { "intro_text": "...", "intro_card": {...}, "segments": [...] }
         if isinstance(data, dict) and "segments" in data:
             intro_text = data.get("intro_text", "")
+            intro_card = data.get("intro_card")  # May be None for old scripts
             segment_list = data.get("segments", [])
             text_map = {item.get('asset_id'): item.get('text', '') for item in segment_list}
             for asset in timeline_assets:
@@ -882,7 +1008,7 @@ def _parse_and_align_segments(project_id: str, script_content: str):
                     'asset_id': aid,
                     'oss_url': asset.get('oss_url')
                 })
-            return segments, timeline_assets, intro_text
+            return segments, timeline_assets, intro_text, intro_card
         
         # Old format: array of segments
         if isinstance(data, list):
@@ -897,7 +1023,7 @@ def _parse_and_align_segments(project_id: str, script_content: str):
                     'asset_id': aid,
                     'oss_url': asset.get('oss_url')
                 })
-            return segments, timeline_assets, intro_text
+            return segments, timeline_assets, intro_text, None  # Old format has no intro_card
     except Exception:
         pass
         
@@ -930,7 +1056,7 @@ def _parse_and_align_segments(project_id: str, script_content: str):
                 'oss_url': asset.get('oss_url')
             })
             
-    return segments, timeline_assets, intro_text
+    return segments, timeline_assets, intro_text, None  # Fallback has no intro_card
 
 @celery_app.task(bind=True, max_retries=3)
 def generate_audio_task(self, project_id: str, script_content: str):
@@ -942,7 +1068,7 @@ def generate_audio_task(self, project_id: str, script_content: str):
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("RENDERING", "COMPLETED"))
 
         # Prepare segments
-        segments, _, _ = _parse_and_align_segments(project_id, script_content)
+        segments, _, _, _ = _parse_and_align_segments(project_id, script_content)
         
         # Temp dir for segments
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1029,7 +1155,7 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
             conn.close()
 
         # 2. Re-generate aligned audio segments locally
-        segments, timeline_assets_db, intro_text = _parse_and_align_segments(project_id, script_content)
+        segments, timeline_assets_db, intro_text, intro_card = _parse_and_align_segments(project_id, script_content)
         
         # Download BGM if provided
         bgm_path = None
@@ -1057,7 +1183,8 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
                 script_segments=segments,  # Enable subtitle generation
                 house_info=house_info,  # Enable intelligent AI enhancement
                 audio_gen=audio_gen,  # Enable intro voice generation
-                intro_text=intro_text  # Use user-edited intro text
+                intro_text=intro_text,  # Use user-edited intro text
+                intro_card=intro_card  # Pass structured intro card data
             )
 
             # 4. Upload
@@ -1108,7 +1235,7 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
     try:
         _set_project_status(project_id, "AUDIO_GENERATING", skip_if_status_in=("COMPLETED",))
         
-        segments, timeline_assets_db, intro_text = _parse_and_align_segments(project_id, script_content)
+        segments, timeline_assets_db, intro_text, intro_card = _parse_and_align_segments(project_id, script_content)
         
         # Fetch house info for intelligent AI enhancement
         conn = psycopg2.connect(Config.DB_DSN)
@@ -1180,7 +1307,8 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 script_segments=segments,  # Enable subtitle generation
                 house_info=house_info,  # Enable intelligent AI enhancement
                 audio_gen=audio_gen,  # Enable intro voice generation
-                intro_text=intro_text  # Use user-edited intro text
+                intro_text=intro_text,  # Use user-edited intro text
+                intro_card=intro_card  # Pass structured intro card data
             )
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")
