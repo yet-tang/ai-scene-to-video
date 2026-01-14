@@ -75,6 +75,11 @@ RUN if [ -d "/app/assets/fonts" ] && [ "$(ls -A /app/assets/fonts)" ]; then \
         echo "No custom fonts found in /app/assets/fonts"; \
     fi
 
+# Force cache invalidation for code copy layer
+# This ensures new files (like agent_workflow.py) are always copied
+ARG CACHE_BUST=unknown
+RUN echo "Cache bust: $CACHE_BUST"
+
 COPY . .
 
 # Print version info at startup

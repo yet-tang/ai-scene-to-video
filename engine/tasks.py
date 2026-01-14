@@ -1359,6 +1359,7 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
         
         # Phase 2-2: BGM Intelligent Selection (if enabled)
         bgm_metadata = None
+        bgm_path = None  # Initialize bgm_path to avoid UnboundLocalError
         
         if Config.BGM_AUTO_SELECT_ENABLED and not bgm_url:
             try:

@@ -13,11 +13,42 @@ trigger: always_on
 - `backend/`：Java 17 + Spring Boot 3（业务编排、状态机、DB/Redis/S3 访问、对外 HTTP API）
 - `engine/`：Python 3.10 + Celery（耗时任务：视觉分析、脚本/音频生成、渲染合成）
 - `frontend/`：Vue 3 + TypeScript + Vite + Vant（H5 前端）
-- `.trae/rules/`：仓库开发规则（本文件 + dev_rules_*）
+- `.qoder/rules/`：仓库开发规则（本文件 + java_code_style.md + python_code_style.md）
 
 原则：
 - `backend` 必须无状态，状态下沉到 Postgres/Redis/S3。
 - `engine` 只做 CPU/GPU/FFmpeg/AI 等重任务，不直接承载对外流量（目前以 Celery Worker 形式运行）。
+
+## 1.1 代码规范引用
+
+本项目遵循业界标准的代码规范：
+
+### Backend (Java)
+- **主要规范**: [阿里巴巴Java开发手册](https://alibaba.github.io/p3c/) + [Google Java Style Guide](https://google.github.io/styleguide/javaguide.html)
+- **详细规范**: 参见 [.qoder/rules/java_code_style.md](java_code_style.md)
+- **关键要求**:
+  - 类名使用 UpperCamelCase，方法名使用 lowerCamelCase
+  - 缩进使用 4 个空格，禁止使用 Tab
+  - 单行代码不超过 120 字符
+  - 所有公共方法必须有 Javadoc 注释
+  - 单元测试覆盖率 ≥ 80%（JaCoCo 强制）
+
+### Engine (Python)
+- **主要规范**: [PEP 8 - Style Guide for Python Code](https://peps.python.org/pep-0008/)
+- **详细规范**: 参见 [.qoder/rules/python_code_style.md](python_code_style.md)
+- **关键要求**:
+  - 函数名、变量名使用 snake_case，类名使用 CapWords
+  - 缩进使用 4 个空格
+  - 单行代码不超过 88 字符（Black 默认）
+  - 所有公共函数必须有文档字符串
+  - 使用 Black 进行代码格式化
+
+### Frontend (TypeScript/Vue)
+- **主要规范**: TypeScript 严格模式 + Vue 3 官方风格指南
+- **关键要求**:
+  - 使用 2 个空格缩进
+  - 使用 vue-tsc 进行类型检查
+  - 组件名使用 PascalCase
 
 ## 2. 本地开发与常用命令
 
