@@ -1,14 +1,16 @@
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip, CompositeAudioClip
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip, CompositeAudioClip, ImageClip
 from config import Config
 from typing import List
 import boto3
 import dashscope
+import numpy as np
 from dashscope import Generation
 from http import HTTPStatus
 import json
 import logging
 import os
 import re
+import unicodedata
 import subprocess
 import tempfile
 import time
@@ -327,8 +329,6 @@ class VideoRenderer:
             Extended clip with last frame frozen for the remaining time
         """
         try:
-            from moviepy.editor import ImageClip
-            
             current_dur = clip.duration
             if current_dur >= target_duration:
                 return clip.subclip(0, target_duration)
@@ -377,7 +377,6 @@ class VideoRenderer:
         try:
             def filter_warm(image):
                 # image is numpy array [h, w, 3] (RGB)
-                import numpy as np
                 img = image.astype(float)
                 # Warm tint: R*1.1, G*1.0, B*0.9
                 img[:,:,0] *= 1.1 
@@ -636,7 +635,6 @@ class VideoRenderer:
                     first_frame = background_video.get_frame(0)
                     
                     # Create ImageClip from the first frame
-                    from moviepy.editor import ImageClip
                     bg_image = ImageClip(first_frame, duration=duration)
                     
                     # Resize to match target size if needed
@@ -959,7 +957,6 @@ class VideoRenderer:
             return False
         
         # Filter out pure punctuation or special characters
-        import unicodedata
         has_letter = False
         for char in cleaned:
             cat = unicodedata.category(char)
@@ -1238,8 +1235,6 @@ class VideoRenderer:
             return bgm_audio
         
         try:
-            import numpy as np
-            
             # Build ducking envelope
             # During TTS: reduce to ducking_level (e.g. 30%)
             # Outside TTS: normal BGM_VOLUME (e.g. 15%)

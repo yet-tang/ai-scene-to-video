@@ -3,6 +3,8 @@ import os
 from typing import Dict, List, Optional
 import logging
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 class BGMSelector:
@@ -16,13 +18,7 @@ class BGMSelector:
     """
     
     def __init__(self, library_path: str = None):
-        """
-        Initialize BGM Selector
-        
-        Args:
-            library_path: Path to bgm_library.json file
-        """
-        from config import Config
+        """\n        Initialize BGM Selector\n        \n        Args:\n            library_path: Path to bgm_library.json file\n        """
         self.library_path = library_path or Config.BGM_LIBRARY_PATH
         self.library = self._load_bgm_library()
         
@@ -43,7 +39,6 @@ class BGMSelector:
     
     def _get_builtin_bgm_list(self) -> List[Dict]:
         """内置BGM列表（Fallback）"""
-        from config import Config
         
         builtin_list = []
         

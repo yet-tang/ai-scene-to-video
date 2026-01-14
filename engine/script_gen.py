@@ -3,6 +3,9 @@ from http import HTTPStatus
 from dashscope import Generation
 from config import Config
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ScriptGenerator:
     def __init__(self):
@@ -259,8 +262,6 @@ class ScriptGenerator:
                         
             except json.JSONDecodeError as e:
                 # Fallback: try to extract json part if mixed with text
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Initial JSON parse failed: {e}")
                 logger.warning(f"Raw content (first 500 chars): {clean_script[:500]}")
                 

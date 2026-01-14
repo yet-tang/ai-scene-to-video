@@ -18,6 +18,15 @@ import time
 
 logger = logging.getLogger(__name__)
 
+try:
+    from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
+    from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
+    TTS_V2_AVAILABLE = True
+except Exception:
+    SpeechSynthesizerV2 = None
+    AudioFormat = None
+    TTS_V2_AVAILABLE = False
+
 def _format_tts_error(result) -> str:
     parts = []
     for key in ("request_id", "status_code", "code", "message"):
@@ -825,7 +834,7 @@ class AudioGenerator:
         MAX_SPEECH_RATE = 1.25  # Faster = still intelligible
         
         # Pre-check engine support
-        use_v2 = Config.TTS_ENGINE in {"cosyvoice", "tts_v2"}
+        use_v2 = Config.TTS_ENGINE in {"cosyvoice", "tts_v2"} and TTS_V2_AVAILABLE
         if not use_v2:
             # Fallback for legacy engine (no SSML/Speed control)
             for seg in segments:
@@ -837,8 +846,6 @@ class AudioGenerator:
             return result_map
 
         # Use TTS V2
-        from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
-        from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
         
         model, voice = _normalize_tts_model_and_voice(model=Config.TTS_MODEL, voice=Config.TTS_VOICE)
         
@@ -1206,36 +1213,30 @@ class AudioGenerator:
     def _generate_internal(self, text, output_path):
         # Legacy support logic...
         # Copied from original generate_audio logic
-        if Config.TTS_ENGINE in {"cosyvoice", "tts_v2"}:
+        if Config.TTS_ENGINE in {"cosyvoice", "tts_v2"} and TTS_V2_AVAILABLE:
+            # Use simple V2 call
+            model, voice = _normalize_tts_model_and_voice(model=Config.TTS_MODEL, voice=Config.TTS_VOICE)
+            
+            chunks = _split_text_by_limit(text or "", 2000)
+            part_files = []
             try:
-                from dashscope.audio.tts_v2 import SpeechSynthesizer as SpeechSynthesizerV2
-                from dashscope.audio.tts_v2.speech_synthesizer import AudioFormat
-            except Exception:
-                pass
-            else:
-                # Use simple V2 call
-                model, voice = _normalize_tts_model_and_voice(model=Config.TTS_MODEL, voice=Config.TTS_VOICE)
+                for idx, chunk in enumerate(chunks):
+                    p_path = f"{output_path}.part{idx}.mp3"
+                    ssml = _text_to_emotional_ssml(chunk) if Config.TTS_ENABLE_SSML else chunk
+                    self._run_tts_v2(
+                        SpeechSynthesizerV2, AudioFormat, model, voice, 
+                        ssml, p_path, enable_ssml=Config.TTS_ENABLE_SSML
+                    )
+                    part_files.append(p_path)
                 
-                chunks = _split_text_by_limit(text or "", 2000)
-                part_files = []
-                try:
-                    for idx, chunk in enumerate(chunks):
-                        p_path = f"{output_path}.part{idx}.mp3"
-                        ssml = _text_to_emotional_ssml(chunk) if Config.TTS_ENABLE_SSML else chunk
-                        self._run_tts_v2(
-                            SpeechSynthesizerV2, AudioFormat, model, voice, 
-                            ssml, p_path, enable_ssml=Config.TTS_ENABLE_SSML
-                        )
-                        part_files.append(p_path)
-                    
-                    if len(part_files) == 1:
-                        os.rename(part_files[0], output_path)
-                    else:
-                        _ffmpeg_concat_mp3(part_files, output_path)
-                    return output_path
-                finally:
-                    for p in part_files:
-                        if os.path.exists(p): os.remove(p)
+                if len(part_files) == 1:
+                    os.rename(part_files[0], output_path)
+                else:
+                    _ffmpeg_concat_mp3(part_files, output_path)
+                return output_path
+            finally:
+                for p in part_files:
+                    if os.path.exists(p): os.remove(p)
                         
         # Fallback to V1
         result = SpeechSynthesizer.call(

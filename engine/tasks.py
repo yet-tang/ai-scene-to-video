@@ -1,10 +1,12 @@
 from worker import celery_app
 from vision import SceneDetector
 from script_gen import ScriptGenerator
-from audio_gen import AudioGenerator
+from audio_gen import AudioGenerator, _ffmpeg_concat_mp3
 from video_render import VideoRenderer
 from aliyun_client import AliyunClient
 from sfx_library import SFXLibrary
+from bgm_selector import BGMSelector
+from agent_workflow import MultiAgentScriptGenerator
 from config import Config
 import json
 import logging
@@ -13,6 +15,8 @@ import re
 import tempfile
 import os
 import boto3
+import cv2
+from moviepy.editor import VideoFileClip
 import uuid
 import urllib.request
 import time
@@ -218,7 +222,6 @@ def _fetch_asset_source(asset_id: str) -> dict | None:
         conn.close()
 
 def _get_video_duration_sec(video_url: str) -> float:
-    import cv2
     cap = cv2.VideoCapture(video_url)
     if not cap.isOpened():
         cap.release()
@@ -484,8 +487,6 @@ def _process_split_logic(project_id: str, asset_id: str, video_url: str, segment
         else:
             local_video = local_video_path
             
-        from moviepy.editor import VideoFileClip
-
         inserted_assets = []
         try:
             video = VideoFileClip(local_video)
@@ -709,7 +710,6 @@ def analyze_video_task(self, project_id: str, asset_id: str, video_url: str):
                  if not shots: shots = [(0.0, duration_sec)]
                  
                  shot_frames = []
-                 import cv2
                  cap = cv2.VideoCapture(local_video)
                  try:
                      for start, end in shots:
@@ -804,8 +804,6 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
         # Phase 2-3: Multi-Agent Script Generation (if enabled)
         if Config.MULTI_AGENT_ENABLED:
             try:
-                from agent_workflow import MultiAgentScriptGenerator
-                
                 logger.info(
                     "Using multi-agent workflow for script generation",
                     extra={"event": "script.multi_agent.enabled", "project_id": project_id}
@@ -1135,7 +1133,6 @@ def _parse_and_align_segments(project_id: str, script_content: str):
         pass
         
     # Fallback: Plain text split
-    import re
     sentences = re.split(r'([。！？.!?])', script_content)
     clean_sentences = []
     current = ""
@@ -1190,7 +1187,6 @@ def generate_audio_task(self, project_id: str, script_content: str):
                 if aid in audio_map:
                     sorted_files.append(audio_map[aid])
             
-            from audio_gen import _ffmpeg_concat_mp3
             if sorted_files:
                 _ffmpeg_concat_mp3(sorted_files, preview_path)
             else:
@@ -1363,8 +1359,6 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
         
         if Config.BGM_AUTO_SELECT_ENABLED and not bgm_url:
             try:
-                from bgm_selector import BGMSelector
-                
                 logger.info(
                     "Using BGM intelligent selection",
                     extra={"event": "bgm.auto_select.enabled", "project_id": project_id}
@@ -1431,7 +1425,6 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 if aid in audio_map:
                     sorted_files.append(audio_map[aid])
             
-            from audio_gen import _ffmpeg_concat_mp3
             if sorted_files:
                 _ffmpeg_concat_mp3(sorted_files, preview_path)
                 

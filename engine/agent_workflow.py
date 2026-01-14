@@ -3,7 +3,16 @@ import logging
 import json
 import re
 
+from config import Config
+
 logger = logging.getLogger(__name__)
+
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    litellm = None
+    LITELLM_AVAILABLE = False
 
 class ScriptState(TypedDict):
     """
@@ -46,10 +55,6 @@ class MultiAgentScriptGenerator:
             llm_client: LLM client instance (e.g., dashscope client or litellm client)
         """
         self.llm_client = llm_client
-        self.max_iterations = 3  # 最大迭代次数
-        self.quality_threshold = 80  # 质量合格阈值
-        
-        from config import Config
         self.max_iterations = Config.MULTI_AGENT_MAX_ITERATIONS
         self.quality_threshold = Config.MULTI_AGENT_QUALITY_THRESHOLD
     
@@ -357,7 +362,8 @@ class MultiAgentScriptGenerator:
         """
         try:
             # Use LiteLLM for unified interface
-            import litellm
+            if not LITELLM_AVAILABLE:
+                raise ImportError("litellm is not installed")
             
             response = litellm.completion(
                 model="dashscope/qwen-plus",  # LiteLLM format

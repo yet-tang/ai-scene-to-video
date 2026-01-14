@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -120,10 +121,7 @@ class Config:
 
     @classmethod
     def validate(cls):
-        """
-        Validate critical configuration and log warnings.
-        """
-        import logging
+        """\n        Validate critical configuration and log warnings.\n        """
         logger = logging.getLogger(__name__)
         
         issues = []
@@ -145,8 +143,7 @@ class Config:
             issues.append("VISUAL_ENHANCEMENT_ENABLED but DASHSCOPE_API_KEY missing")
         
         if cls.SFX_ENABLED:
-            import os as _os
-            if not _os.path.exists(cls.SFX_LIBRARY_PATH):
+            if not os.path.exists(cls.SFX_LIBRARY_PATH):
                 issues.append(f"SFX_ENABLED but library path not found: {cls.SFX_LIBRARY_PATH}")
         
         # Validate font configuration
@@ -154,10 +151,9 @@ class Config:
             font_name = cls.SUBTITLE_FONT
             logger.info(f"Subtitle font configured: {font_name}")
             # Check if custom fonts directory exists
-            import os as _os
             custom_font_dir = "/app/assets/fonts"
-            if _os.path.exists(custom_font_dir):
-                font_files = _os.listdir(custom_font_dir)
+            if os.path.exists(custom_font_dir):
+                font_files = os.listdir(custom_font_dir)
                 logger.info(f"Custom fonts available: {', '.join(font_files)}")
             else:
                 logger.debug(f"Custom font directory not found: {custom_font_dir}")

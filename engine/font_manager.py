@@ -10,6 +10,8 @@ import os
 import logging
 from typing import List, Dict, Optional
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 
@@ -208,7 +210,6 @@ class FontManager:
         logger.info(f"Total system fonts available: {len(available_fonts)}")
         
         # Check specific fonts
-        from config import Config
         configured_font = Config.SUBTITLE_FONT
         is_available = FontManager.validate_font(configured_font)
         logger.info(f"Configured font '{configured_font}': {'✓ Available' if is_available else '✗ Not Found'}")
