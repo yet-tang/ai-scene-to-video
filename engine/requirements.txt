@@ -28,5 +28,5 @@ sqlalchemy==2.0.23
 # Storage
 boto3==1.34.0
 
-# Unified LLM Client
+# Unified LLM Client (Phase 2-3: Multi-Agent Support)
 litellm>=1.50.0

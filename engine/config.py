@@ -46,14 +46,27 @@ class Config:
 
     # Subtitle Configuration (P0 Feature)
     SUBTITLE_ENABLED = os.getenv("SUBTITLE_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
-    # Use Noto Sans CJK SC (Chinese font available in Docker via fonts-noto-cjk)
-    # This font supports Chinese characters for subtitle rendering
-    SUBTITLE_FONT = os.getenv("SUBTITLE_FONT", "Noto-Sans-CJK-SC-Bold")
+    
+    # Font Management (Extensible)
+    # Built-in fonts available in container:
+    # - Noto-Sans-CJK-SC-Bold: System font (via fonts-noto-cjk package)
+    # - AlibabaPuHuiTi-3-75-SemiBold: Custom font from /app/assets/fonts
+    AVAILABLE_FONTS = {
+        "noto-sans-bold": "Noto-Sans-CJK-SC-Bold",  # System font (default)
+        "alibaba-puhuiti-semibold": "AlibabaPuHuiTi-3-75-SemiBold",  # Custom font
+        # Future: Add more fonts here
+    }
+    
+    # Default font selection (can be overridden via SUBTITLE_FONT env var)
+    _FONT_KEY = os.getenv("SUBTITLE_FONT_KEY", "alibaba-puhuiti-semibold")  # Font key from AVAILABLE_FONTS
+    _FONT_NAME_OVERRIDE = os.getenv("SUBTITLE_FONT", "")  # Direct font name override
+    SUBTITLE_FONT = _FONT_NAME_OVERRIDE if _FONT_NAME_OVERRIDE else AVAILABLE_FONTS.get(_FONT_KEY, "Noto-Sans-CJK-SC-Bold")
+    
     SUBTITLE_FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "48"))
     SUBTITLE_POSITION = float(os.getenv("SUBTITLE_POSITION", "0.75"))  # 0-1, relative to screen height
 
     # Visual Enhancement Configuration (P0 Feature)
-    VISUAL_ENHANCEMENT_ENABLED = os.getenv("VISUAL_ENHANCEMENT_ENABLED", "false").lower() in {"1", "true", "yes", "y"}
+    VISUAL_ENHANCEMENT_ENABLED = os.getenv("VISUAL_ENHANCEMENT_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
     VISUAL_ENHANCEMENT_STRATEGY = os.getenv("VISUAL_ENHANCEMENT_STRATEGY", "smart")  # "all", "smart", "none"
     VISUAL_ENHANCEMENT_MODEL = os.getenv("VISUAL_ENHANCEMENT_MODEL", "wanx2.1-vace-plus")
 
@@ -83,6 +96,27 @@ class Config:
     RENDER_THREADS = int(os.getenv("RENDER_THREADS", "4"))  # FFmpeg rendering threads
     ENABLE_CLIP_CACHE = os.getenv("ENABLE_CLIP_CACHE", "false").lower() in {"1", "true", "yes", "y"}
     MAX_VIDEO_RESOLUTION = int(os.getenv("MAX_VIDEO_RESOLUTION", "1080"))  # Max height in pixels
+
+    # ============ Phase 2-1: 动态节奏控制 ============
+    DYNAMIC_SPEED_ENABLED = os.getenv("DYNAMIC_SPEED_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    
+    # 速度映射配置（可通过环境变量覆盖）
+    SPEED_MAP_STUNNING = float(os.getenv("SPEED_MAP_STUNNING", "0.85"))  # 惊艳镜头
+    SPEED_MAP_HEALING = float(os.getenv("SPEED_MAP_HEALING", "0.90"))   # 治愈镜头
+    SPEED_MAP_COZY = float(os.getenv("SPEED_MAP_COZY", "0.90"))        # 温馨镜头
+    SPEED_MAP_LUXURY = float(os.getenv("SPEED_MAP_LUXURY", "0.95"))    # 高级镜头
+    SPEED_MAP_NORMAL = float(os.getenv("SPEED_MAP_NORMAL", "1.0"))     # 普通镜头
+    SPEED_MAP_TRANSITION = float(os.getenv("SPEED_MAP_TRANSITION", "1.1"))  # 过渡镜头
+    
+    # ============ Phase 2-2: BGM智能匹配 ============
+    BGM_AUTO_SELECT_ENABLED = os.getenv("BGM_AUTO_SELECT_ENABLED", "false").lower() in {"1", "true", "yes", "y"}
+    BGM_DYNAMIC_VOLUME_ENABLED = os.getenv("BGM_DYNAMIC_VOLUME_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    BGM_LIBRARY_PATH = os.getenv("BGM_LIBRARY_PATH", "/app/bgm_library.json")
+    
+    # ============ Phase 2-3: 多智能体协作 ============
+    MULTI_AGENT_ENABLED = os.getenv("MULTI_AGENT_ENABLED", "true").lower() in {"1", "true", "yes", "y"}
+    MULTI_AGENT_MAX_ITERATIONS = int(os.getenv("MULTI_AGENT_MAX_ITERATIONS", "3"))  # 最大迭代次数
+    MULTI_AGENT_QUALITY_THRESHOLD = float(os.getenv("MULTI_AGENT_QUALITY_THRESHOLD", "80"))  # 质量合格阈值
 
     @classmethod
     def validate(cls):
@@ -114,6 +148,19 @@ class Config:
             import os as _os
             if not _os.path.exists(cls.SFX_LIBRARY_PATH):
                 issues.append(f"SFX_ENABLED but library path not found: {cls.SFX_LIBRARY_PATH}")
+        
+        # Validate font configuration
+        if cls.SUBTITLE_ENABLED:
+            font_name = cls.SUBTITLE_FONT
+            logger.info(f"Subtitle font configured: {font_name}")
+            # Check if custom fonts directory exists
+            import os as _os
+            custom_font_dir = "/app/assets/fonts"
+            if _os.path.exists(custom_font_dir):
+                font_files = _os.listdir(custom_font_dir)
+                logger.info(f"Custom fonts available: {', '.join(font_files)}")
+            else:
+                logger.debug(f"Custom font directory not found: {custom_font_dir}")
         
         # Log all issues
         for issue in issues:

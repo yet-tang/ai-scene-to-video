@@ -177,5 +177,12 @@ logging.info(f"Git Commit: {git_commit}")
 logging.info(f"Build Time: {build_time}")
 logging.info("===========================")
 
+# Log font status on startup
+try:
+    from font_manager import FontManager
+    FontManager.log_font_status()
+except Exception as e:
+    logging.warning(f"Failed to log font status: {e}")
+
 if __name__ == '__main__':
     celery_app.start()

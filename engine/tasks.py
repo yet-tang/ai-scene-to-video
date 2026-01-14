@@ -797,11 +797,52 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
     Background task to generate video script using LLM.
     
     Includes quality gate: Opening hook strength validation.
+    Phase 2-3: Multi-agent workflow for quality improvement.
     """
     started = time.monotonic()
     try:
-        # 1. Generate Script
-        script_content = script_gen.generate_script(house_info, timeline_data)
+        # Phase 2-3: Multi-Agent Script Generation (if enabled)
+        if Config.MULTI_AGENT_ENABLED:
+            try:
+                from agent_workflow import MultiAgentScriptGenerator
+                
+                logger.info(
+                    "Using multi-agent workflow for script generation",
+                    extra={"event": "script.multi_agent.enabled", "project_id": project_id}
+                )
+                
+                # Initialize multi-agent generator
+                multi_agent_gen = MultiAgentScriptGenerator(llm_client=None)  # Will use litellm internally
+                
+                # Generate script with multi-agent workflow
+                final_script, metadata = multi_agent_gen.generate_script_with_multi_agent(
+                    house_info=house_info,
+                    timeline_data=timeline_data
+                )
+                
+                script_content = final_script
+                
+                logger.info(
+                    f"Multi-agent script generation completed",
+                    extra={
+                        "event": "script.multi_agent.complete",
+                        "project_id": project_id,
+                        "iterations": metadata['iterations'],
+                        "quality_score": metadata['quality_score'],
+                        "passed": metadata['passed']
+                    }
+                )
+                
+            except Exception as e:
+                logger.warning(
+                    f"Multi-agent script generation failed, falling back to standard generation: {e}",
+                    extra={"event": "script.multi_agent.fallback", "project_id": project_id}
+                )
+                # Fallback to standard generation
+                script_content = script_gen.generate_script(house_info, timeline_data)
+        else:
+            # Standard script generation
+            script_content = script_gen.generate_script(house_info, timeline_data)
 
         # 2. Quality Gate: Validate Opening Hook Strength
         validation_result = _validate_opening_hook(script_content, house_info)
@@ -942,6 +983,72 @@ def _validate_opening_hook(script_content: str, house_info: dict) -> dict:
             'reason': f"开场钩子缺少关键元素: {', '.join(missing)}（当前强度{strength}/10）",
             'hook_text': hook_text[:50]
         }
+
+def _detect_video_style(script_content: str, timeline_assets: list) -> str:
+    """
+    检测视频风格（Phase 2-2新增）
+    
+    策略：
+    1. 统计timeline_assets中emotion标签分布
+    2. 根据主导情绪判断风格
+    
+    Returns:
+        stunning/cozy/healing
+    """
+    emotion_distribution = _calculate_emotion_distribution(timeline_assets)
+    
+    if not emotion_distribution:
+        return 'cozy'  # Default style
+    
+    # Find dominant emotion
+    dominant_emotion = max(emotion_distribution, key=emotion_distribution.get)
+    
+    # Map emotion to video style
+    if dominant_emotion in ['惊艳', '震撼', 'stunning']:
+        return 'stunning'
+    elif dominant_emotion in ['治愈', '阳光', 'healing']:
+        return 'healing'
+    else:
+        return 'cozy'  # 温馨 is default
+
+def _extract_keywords_from_script(script_content: str) -> list:
+    """
+    从脚本中提取关键词（Phase 2-2新增）
+    
+    Returns:
+        List of keywords
+    """
+    keywords = []
+    
+    # Common real estate keywords
+    keyword_patterns = [
+        '江景', '湖景', '海景', '山景',
+        '阳光', '采光', '通透',
+        '温馨', '舒适', '优雅', '精致',
+        '大空间', '开阔', '270度',
+        '学区', '地铁', '商圈'
+    ]
+    
+    # Extract from script content
+    text_lower = script_content.lower()
+    for keyword in keyword_patterns:
+        if keyword in script_content:
+            keywords.append(keyword)
+    
+    return keywords
+
+def _calculate_emotion_distribution(timeline_assets: list) -> dict:
+    """
+    统计情绪分布（Phase 2-2新增）
+    
+    Returns:
+        Dict of {emotion: count}
+    """
+    distribution = {}
+    for asset in timeline_assets:
+        emotion = asset.get('emotion', '普通')
+        distribution[emotion] = distribution.get(emotion, 0) + 1
+    return distribution
 
 def _parse_and_align_segments(project_id: str, script_content: str):
     """
@@ -1250,9 +1357,61 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
         finally:
             conn.close()
         
-        # Download BGM
-        bgm_path = None
-        if bgm_url:
+        # Phase 2-2: BGM Intelligent Selection (if enabled)
+        bgm_metadata = None
+        
+        if Config.BGM_AUTO_SELECT_ENABLED and not bgm_url:
+            try:
+                from bgm_selector import BGMSelector
+                
+                logger.info(
+                    "Using BGM intelligent selection",
+                    extra={"event": "bgm.auto_select.enabled", "project_id": project_id}
+                )
+                
+                # Detect video style and emotion distribution
+                video_style = _detect_video_style(script_content, timeline_assets_db)
+                script_keywords = _extract_keywords_from_script(script_content)
+                emotion_distribution = _calculate_emotion_distribution(timeline_assets_db)
+                
+                # Select BGM
+                selector = BGMSelector()
+                bgm_metadata = selector.select_bgm(
+                    video_style=video_style,
+                    script_keywords=script_keywords,
+                    emotion_distribution=emotion_distribution
+                )
+                
+                if bgm_metadata:
+                    bgm_url_selected = bgm_metadata.get('url')
+                    if bgm_url_selected:
+                        try:
+                            bgm_suffix = _infer_suffix_from_url(bgm_url_selected, ".mp3")
+                            bgm_path = _download_to_temp(bgm_url_selected, suffix=bgm_suffix)
+                            
+                            logger.info(
+                                f"BGM auto-selected: {bgm_metadata.get('id')}",
+                                extra={
+                                    "event": "bgm.auto_select.success",
+                                    "project_id": project_id,
+                                    "bgm_id": bgm_metadata.get('id'),
+                                    "video_style": video_style
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to download auto-selected BGM: {e}")
+                            bgm_metadata = None
+                else:
+                    logger.info("No suitable BGM found, continuing without BGM")
+                    
+            except Exception as e:
+                logger.warning(
+                    f"BGM auto-selection failed: {e}",
+                    extra={"event": "bgm.auto_select.failed", "project_id": project_id}
+                )
+        
+        # Download BGM if manually specified
+        if not bgm_path and bgm_url:
             try:
                 bgm_suffix = _infer_suffix_from_url(bgm_url, ".mp3")
                 bgm_path = _download_to_temp(bgm_url, suffix=bgm_suffix)
@@ -1308,7 +1467,8 @@ def render_pipeline_task(self, project_id: str, script_content: str, _timeline_a
                 house_info=house_info,  # Enable intelligent AI enhancement
                 audio_gen=audio_gen,  # Enable intro voice generation
                 intro_text=intro_text,  # Use user-edited intro text
-                intro_card=intro_card  # Pass structured intro card data
+                intro_card=intro_card,  # Pass structured intro card data
+                bgm_metadata=bgm_metadata  # Phase 2-2: Pass BGM metadata for dynamic volume curve
             )
             
             final_video_url = upload_to_s3(output_path, f"rendered_{project_id}.mp4")

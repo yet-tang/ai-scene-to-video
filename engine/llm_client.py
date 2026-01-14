@@ -13,6 +13,7 @@
 设计文档参考：.qoder/quests/ai-video-editing-system-design.md 第2.2节
 """
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -34,6 +35,41 @@ from llm_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_log_params(call_params: Dict[str, Any], max_content_len: int = 500) -> Dict[str, Any]:
+    """
+    安全格式化请求参数用于日志记录
+    
+    - 隐藏api_key
+    - 截断messages中过长的content
+    """
+    safe_params = {}
+    for k, v in call_params.items():
+        if k == "api_key":
+            # 隐藏 API Key，只显示前6位
+            safe_params[k] = f"{v[:6]}..." if v and len(v) > 6 else "***"
+        elif k == "messages":
+            # 截断过长的消息内容
+            safe_messages = []
+            for msg in v:
+                safe_msg = {"role": msg.get("role", "unknown")}
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    if len(content) > max_content_len:
+                        safe_msg["content"] = content[:max_content_len] + f"... (truncated, total {len(content)} chars)"
+                    else:
+                        safe_msg["content"] = content
+                elif isinstance(content, list):
+                    # 多模态内容
+                    safe_msg["content"] = f"[multimodal: {len(content)} items]"
+                else:
+                    safe_msg["content"] = str(content)[:max_content_len]
+                safe_messages.append(safe_msg)
+            safe_params[k] = safe_messages
+        else:
+            safe_params[k] = v
+    return safe_params
 
 
 class UnifiedLLMClient:
@@ -133,6 +169,16 @@ class UnifiedLLMClient:
         }
         call_params.update(kwargs)
         
+        # 打印请求入参
+        logger.info(
+            "LLM request",
+            extra={
+                "event": "llm.request",
+                "agent": self.agent_name,
+                "params": json.dumps(_safe_log_params(call_params), ensure_ascii=False, default=str),
+            }
+        )
+        
         try:
             response = litellm.completion(**call_params)
             
@@ -208,6 +254,16 @@ class UnifiedLLMClient:
             "api_key": os.getenv(self.config.api_key_env),
         }
         call_params.update(kwargs)
+        
+        # 打印请求入参
+        logger.info(
+            "LLM multimodal request",
+            extra={
+                "event": "llm.multimodal.request",
+                "agent": self.agent_name,
+                "params": json.dumps(_safe_log_params(call_params), ensure_ascii=False, default=str),
+            }
+        )
         
         try:
             response = litellm.completion(**call_params)
@@ -311,15 +367,27 @@ class UnifiedLLMClient:
             }
         )
         
+        # 构建并打印fallback请求入参
+        fallback_params = {
+            "model": fallback_model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.config.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
+            "api_key": os.getenv("DASHSCOPE_API_KEY"),
+        }
+        fallback_params.update(kwargs)
+        
+        logger.info(
+            "LLM fallback request",
+            extra={
+                "event": "llm.fallback.request",
+                "agent": self.agent_name,
+                "params": json.dumps(_safe_log_params(fallback_params), ensure_ascii=False, default=str),
+            }
+        )
+        
         try:
-            response = litellm.completion(
-                model=fallback_model,
-                messages=messages,
-                temperature=temperature if temperature is not None else self.config.temperature,
-                max_tokens=max_tokens if max_tokens is not None else self.config.max_tokens,
-                api_key=os.getenv("DASHSCOPE_API_KEY"),
-                **kwargs
-            )
+            response = litellm.completion(**fallback_params)
             
             logger.info(
                 f"Fallback call success",

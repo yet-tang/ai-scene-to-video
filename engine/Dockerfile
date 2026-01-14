@@ -57,6 +57,23 @@ RUN echo "=== Chinese Font Check ===" && fc-list :lang=zh | head -5 || echo "No 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy custom fonts to container
+# This allows adding custom fonts beyond system packages
+COPY ../assets/fonts /app/assets/fonts
+
+# Register custom fonts with system font cache
+# This makes fonts available to MoviePy/ImageMagick for text rendering
+RUN if [ -d "/app/assets/fonts" ] && [ "$(ls -A /app/assets/fonts)" ]; then \
+        mkdir -p /usr/share/fonts/truetype/custom && \
+        cp /app/assets/fonts/*.ttf /usr/share/fonts/truetype/custom/ 2>/dev/null || true && \
+        cp /app/assets/fonts/*.otf /usr/share/fonts/truetype/custom/ 2>/dev/null || true && \
+        fc-cache -f -v && \
+        echo "=== Custom Fonts Installed ===" && \
+        fc-list | grep -i "alibaba\|puhuiti" || echo "Custom font verification: check complete"; \
+    else \
+        echo "No custom fonts found in /app/assets/fonts"; \
+    fi
+
 COPY . .
 
 # Print version info at startup

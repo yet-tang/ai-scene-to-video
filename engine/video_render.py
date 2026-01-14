@@ -1,5 +1,6 @@
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, vfx, ColorClip, afx, TextClip, CompositeVideoClip, CompositeAudioClip
 from config import Config
+from typing import List
 import boto3
 import dashscope
 from dashscope import Generation
@@ -229,6 +230,89 @@ class VideoRenderer:
         safe_dur = max(0.1, float(duration or 0.0))
         clip = ColorClip(size=(size or (1280, 720)), color=(0, 0, 0), duration=safe_dur)
         return clip
+
+    def _apply_dynamic_speed_control(self, clip, asset: dict, asset_id: str):
+        """
+        Apply dynamic speed control based on emotion tag.
+        
+        Speed mapping strategy:
+        - 惊艳 (stunning): 0.85x - Slow motion to highlight impact
+        - 治愈/温馨 (healing/cozy): 0.90x - Gentle slow motion for warmth
+        - 高级 (luxury): 0.95x - Micro slow motion for quality details
+        - 普通 (normal): 1.0x - Normal speed
+        - 过渡 (transition): 1.1x - Speed up for quick transitions
+        
+        Args:
+            clip: VideoFileClip object
+            asset: Asset dict with emotion/shock_score metadata
+            asset_id: Asset ID for logging
+            
+        Returns:
+            Modified clip with speed adjustment or original clip if disabled/failed
+        """
+        if not Config.DYNAMIC_SPEED_ENABLED:
+            return clip
+        
+        try:
+            # Extract emotion and shock_score
+            emotion = asset.get('emotion', '').strip()
+            shock_score = asset.get('shock_score', 0)
+            recommended_speed = asset.get('recommended_speed')  # From vision analysis (Phase 2 enhancement)
+            
+            # Determine speed factor
+            speed_factor = 1.0
+            reasoning = "Default normal speed"
+            
+            if recommended_speed is not None:
+                # Use AI-recommended speed if available (Phase 2 vision enhancement)
+                speed_factor = float(recommended_speed)
+                reasoning = asset.get('speed_reasoning', 'AI-recommended speed')
+            else:
+                # Fallback: Rule-based speed mapping
+                if emotion == '惊艳' or shock_score >= 9:
+                    speed_factor = Config.SPEED_MAP_STUNNING
+                    reasoning = "Stunning visual - slow motion to highlight impact"
+                elif emotion in ['治愈', '温馨', 'healing', 'cozy']:
+                    speed_factor = Config.SPEED_MAP_COZY
+                    reasoning = "Cozy/healing atmosphere - gentle slow motion"
+                elif emotion in ['高级', '精致', 'luxury', 'elegant']:
+                    speed_factor = Config.SPEED_MAP_LUXURY
+                    reasoning = "Luxury/elegant - micro slow motion for details"
+                elif emotion in ['过渡', 'transition'] or '走廊' in asset.get('scene_label', ''):
+                    speed_factor = Config.SPEED_MAP_TRANSITION
+                    reasoning = "Transition scene - speed up"
+                else:
+                    speed_factor = Config.SPEED_MAP_NORMAL
+                    reasoning = "Normal scene - maintain flow"
+            
+            # Safety range (0.7x - 1.2x to avoid excessive distortion)
+            speed_factor = max(0.7, min(1.2, speed_factor))
+            
+            # Apply speed adjustment if not normal speed
+            if abs(speed_factor - 1.0) > 0.01:  # Only apply if meaningfully different
+                original_duration = clip.duration
+                clip = clip.fx(vfx.speedx, speed_factor)
+                
+                logger.info(
+                    f"Applied dynamic speed control",
+                    extra={
+                        "event": "video.speed.dynamic",
+                        "asset_id": asset_id,
+                        "emotion": emotion,
+                        "shock_score": shock_score,
+                        "original_speed": 1.0,
+                        "adjusted_speed": speed_factor,
+                        "original_duration": original_duration,
+                        "new_duration": clip.duration,
+                        "reasoning": reasoning
+                    }
+                )
+            
+            return clip
+            
+        except Exception as e:
+            logger.warning(f"Dynamic speed control failed for asset {asset_id}: {e}")
+            return clip  # Return original clip on failure
 
     def _extend_with_last_frame(self, clip, target_duration: float):
         """
@@ -1200,6 +1284,82 @@ class VideoRenderer:
         except Exception as e:
             logger.warning(f"Auto-ducking failed, using original BGM: {e}")
             return bgm_audio
+    
+    def _apply_dynamic_volume_curve(self, bgm_clip, video_duration: float, intensity_curve: List[float] = None) -> 'AudioClip':
+        """
+        应用动态音量曲线到BGM（Phase 2-2新增）
+        
+        Args:
+            bgm_clip: 原始BGM音频
+            video_duration: 视频总时长
+            intensity_curve: 音量曲线（5段归一化值，如[0.1, 0.3, 0.35, 0.3, 0.2]）
+        
+        Returns:
+            应用动态音量后的BGM
+        """
+        if not Config.BGM_DYNAMIC_VOLUME_ENABLED:
+            return bgm_clip
+        
+        # Default 5-segment curve if not provided
+        if not intensity_curve:
+            intensity_curve = [0.15, 0.2, 0.25, 0.2, 0.15]  # Gentle default curve
+        
+        # Ensure we have exactly 5 segments
+        if len(intensity_curve) != 5:
+            logger.warning(f"Intensity curve must have 5 values, got {len(intensity_curve)}. Using default.")
+            intensity_curve = [0.15, 0.2, 0.25, 0.2, 0.15]
+        
+        try:
+            # 将视频分为5段
+            segment_duration = video_duration / 5.0
+            
+            def volume_envelope(t):
+                """
+                根据时间t返回音量系数
+                
+                音量曲线设计：
+                - Segment 1 (0-20%): 开场 - 低音量渐入
+                - Segment 2 (20-40%): 缓升 - 逐渐提升
+                - Segment 3 (40-60%): 高潮 - 最高音量
+                - Segment 4 (60-80%): 收尾 - 降低音量
+                - Segment 5 (80-100%): 结束 - 渐出
+                """
+                segment_index = min(int(t / segment_duration), 4)
+                current_intensity = intensity_curve[segment_index]
+                
+                # Smooth transition between segments using linear interpolation
+                next_index = min(segment_index + 1, 4)
+                segment_start = segment_index * segment_duration
+                segment_progress = (t - segment_start) / segment_duration
+                
+                if segment_index < 4:
+                    next_intensity = intensity_curve[next_index]
+                    # Linear interpolation
+                    interpolated_intensity = current_intensity + (next_intensity - current_intensity) * segment_progress
+                else:
+                    interpolated_intensity = current_intensity
+                
+                # Multiply by base BGM volume
+                return interpolated_intensity * Config.BGM_VOLUME
+            
+            # Apply volume envelope using MoviePy's volumex with function
+            bgm_with_curve = bgm_clip.fl(lambda gf, t: gf(t) * (volume_envelope(t) / Config.BGM_VOLUME), apply_to=['audio'])
+            
+            logger.info(
+                f"Applied dynamic volume curve to BGM",
+                extra={
+                    "event": "bgm.volume.dynamic",
+                    "video_duration": video_duration,
+                    "curve": intensity_curve,
+                    "segment_duration": segment_duration
+                }
+            )
+            
+            return bgm_with_curve
+            
+        except Exception as e:
+            logger.warning(f"Dynamic volume curve failed: {e}")
+            return bgm_clip
 
     def _generate_sfx_tracks(self, script_segments: list, video_duration: float) -> list:
         """
@@ -1368,7 +1528,7 @@ class VideoRenderer:
         
         return result
     
-    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None, intro_text: str = None, intro_card: dict = None) -> str:
+    def render_video(self, timeline_assets: list, audio_map: dict, output_path: str, bgm_path: str = None, script_segments: list = None, house_info: dict = None, audio_gen=None, intro_text: str = None, intro_card: dict = None, bgm_metadata: dict = None) -> str:
         """
         Concatenate video clips based on timeline and add audio track.
         audio_map: dict { asset_id: local_audio_path }
@@ -1378,6 +1538,7 @@ class VideoRenderer:
         audio_gen: optional AudioGenerator instance for intro voice generation
         intro_text: optional user-edited intro voice-over text (takes precedence over auto-generation)
         intro_card: optional structured intro card data with headline, specs, highlights
+        bgm_metadata: optional BGM metadata dict with intensity_curve (Phase 2-2 new feature)
         """
         final_clips = []
         temp_files_to_clean = []
@@ -1420,6 +1581,10 @@ class VideoRenderer:
                     clip = self._open_video_clip(local_video_path)
                     # Apply Warm Filter (Global for "Warm Life Style")
                     clip = self._apply_warm_filter(clip)
+                    
+                    # --- Phase 2-1: Dynamic Speed Control (Emotion-based) ---
+                    clip = self._apply_dynamic_speed_control(clip, asset, asset_id)
+                    # ---------------------------------------------------------
                 except Exception as video_error:
                     logger.error(
                         f"Failed to open video clip for asset {asset_id}",
@@ -1743,8 +1908,16 @@ class VideoRenderer:
                     else:
                         bgm_clip = bgm_clip.subclip(0, final_video.duration)
                     
-                    # Volume control
-                    bgm_clip = bgm_clip.volumex(Config.BGM_VOLUME)
+                    # --- Phase 2-2: Dynamic Volume Curve ---
+                    if bgm_metadata and Config.BGM_DYNAMIC_VOLUME_ENABLED:
+                        # Use BGM metadata intensity curve if available
+                        intensity_curve = bgm_metadata.get('intensity_curve', [0.15, 0.2, 0.25, 0.2, 0.15])
+                        bgm_clip = self._apply_dynamic_volume_curve(bgm_clip, final_video.duration, intensity_curve)
+                        logger.info(f"Applied dynamic volume curve from BGM metadata")
+                    else:
+                        # Fallback: Static volume control
+                        bgm_clip = bgm_clip.volumex(Config.BGM_VOLUME)
+                    # ----------------------------------------
                     
                     # --- Auto-ducking (P1 Feature) ---
                     if Config.AUTO_DUCKING_ENABLED and script_segments:
