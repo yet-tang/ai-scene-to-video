@@ -1,0 +1,13 @@
+# Custom Fonts Directory
+
+This directory contains custom fonts used for video subtitle rendering.
+
+## Location Note
+
+- Fonts must be placed in `engine/assets/fonts/` (not root `assets/fonts/`)
+- This is required because Docker build context is limited to the `engine/` directory
+- When adding new fonts, copy them to this directory before building the Docker image
+
+## Current Fonts
+
+- AlibabaPuHuiTi-3-75-SemiBold.ttf (37MB) - Alibaba PuHuiTi font for subtitle rendering

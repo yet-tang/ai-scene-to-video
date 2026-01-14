@@ -59,7 +59,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy custom fonts to container
 # This allows adding custom fonts beyond system packages
-COPY ../assets/fonts /app/assets/fonts
+# Note: fonts are stored in engine/assets/fonts (within build context)
+COPY assets/fonts /app/assets/fonts
 
 # Register custom fonts with system font cache
 # This makes fonts available to MoviePy/ImageMagick for text rendering
