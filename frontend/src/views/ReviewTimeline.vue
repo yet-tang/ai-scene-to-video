@@ -615,13 +615,14 @@ const mergeTimelineAssets = (newAssets: Asset[]) => {
     }
   }
 
-  if (!analysisDone.value) {
-    const done = assets.value.length > 0 && isSplitDoneStatus(projectStatus.value)
-    if (done) {
+  // 检查是否分析完成
+  const done = assets.value.length > 0 && isSplitDoneStatus(projectStatus.value)
+  if (done) {
+    if (!analysisDone.value) {
       analysisDone.value = true
-      stopTimelinePolling()
       showToast('AI 分析完成')
     }
+    stopTimelinePolling()
   }
 }
 
@@ -679,13 +680,15 @@ const stopTimelinePolling = () => {
 const startScriptPolling = () => {
   stopScriptPolling()
   scriptPollTimer = setInterval(async () => {
-    if (!isScriptGenerating.value) {
+    // 如果状态不再是生成中，停止轮询
+    if (!isScriptGenerating.value && projectStatus.value !== 'SCRIPT_GENERATING') {
       stopScriptPolling()
       return
     }
 
     await projectStore.fetchProject(projectId)
-    if (projectStore.currentProject.status === 'SCRIPT_GENERATED') {
+    // 如果达到或超过已生成状态，更新数据并停止
+    if (isScriptDoneStatus(projectStatus.value)) {
       const fullScript = projectStore.currentProject.script
       const distributed = distributeScript(fullScript, assets.value.length, assets.value)
       introText.value = distributed.intro
@@ -699,6 +702,16 @@ const startScriptPolling = () => {
       showToast('脚本生成完成')
     }
   }, 1500)
+}
+
+const isScriptDoneStatus = (status: string) => {
+  return [
+    'SCRIPT_GENERATED',
+    'AUDIO_GENERATING',
+    'AUDIO_GENERATED',
+    'RENDERING',
+    'COMPLETED'
+  ].includes(status)
 }
 
 const stopScriptPolling = () => {

@@ -165,8 +165,13 @@ class UnifiedLLMClient:
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
-            "api_key": os.getenv(self.config.api_key_env),
         }
+        
+        # 显式传递 API Key，避免环境变量注入问题
+        api_key = os.getenv(self.config.api_key_env)
+        if api_key:
+            call_params["api_key"] = api_key
+            
         call_params.update(kwargs)
         
         # 打印请求入参
@@ -189,6 +194,7 @@ class UnifiedLLMClient:
                     "event": "llm.call.success",
                     "agent": self.agent_name,
                     "model": model,
+                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
@@ -251,8 +257,13 @@ class UnifiedLLMClient:
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
-            "api_key": os.getenv(self.config.api_key_env),
         }
+        
+        # 显式传递 API Key
+        api_key = os.getenv(self.config.api_key_env)
+        if api_key:
+            call_params["api_key"] = api_key
+            
         call_params.update(kwargs)
         
         # 打印请求入参
@@ -373,8 +384,13 @@ class UnifiedLLMClient:
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
-            "api_key": os.getenv("DASHSCOPE_API_KEY"),
         }
+        
+        # 显式传递 API Key
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        if api_key:
+            fallback_params["api_key"] = api_key
+            
         fallback_params.update(kwargs)
         
         logger.info(

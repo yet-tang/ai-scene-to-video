@@ -41,10 +41,10 @@ class ModelConfig:
 # ============================================
 
 AGENT_MODEL_MAPPING = {
-    # 视频分析Agent：使用Qwen-VL-Max（多模态视觉理解）
+    # 视频分析Agent：使用qwen3-vl-plus（多模态视觉理解）
     "vision_agent": ModelConfig(
         provider="dashscope",
-        model="qwen-vl-max",
+        model="qwen3-vl-plus",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.5,  # 视觉分析需要稳定性
         max_tokens=4000,
@@ -57,7 +57,7 @@ AGENT_MODEL_MAPPING = {
         api_key_env="GROK_API_KEY",
         temperature=0.8,  # 营销文案需要创意
         max_tokens=3000,
-        fallback_model="qwen-plus"
+        fallback_model="qwen3-max"
     ),
     
     # 脚本创作Agent：使用豆包（高质量文案生成）
@@ -67,7 +67,7 @@ AGENT_MODEL_MAPPING = {
         api_key_env="VOLCENGINE_API_KEY",
         temperature=0.7,
         max_tokens=4000,
-        fallback_model="qwen-plus"
+        fallback_model="qwen3-max"
     ),
     
     # 智能剪辑Agent：使用Qwen-Plus（决策逻辑）
@@ -100,7 +100,7 @@ AGENT_MODEL_MAPPING = {
     # 总导演Agent：使用Qwen-Max（全局协调）
     "orchestrator_agent": ModelConfig(
         provider="dashscope",
-        model="qwen-max",
+        model="qwen3-max",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.7,
         max_tokens=3000,
