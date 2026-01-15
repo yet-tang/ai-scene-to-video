@@ -11,6 +11,7 @@ import com.aiscene.entity.Project;
 import com.aiscene.entity.ProjectStatus;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -180,7 +181,10 @@ public class ProjectController {
     public ResponseEntity<Void> generateAudio(@PathVariable UUID id, @RequestBody(required = false) String scriptContent) {
         if (scriptContent == null) {
             Project p = projectService.getProject(id);
-            scriptContent = p.getScriptContent(); 
+            JsonNode node = p.getScriptContent();
+            if (node != null) {
+                scriptContent = node.isTextual() ? node.asText() : node.toString();
+            }
         }
         projectService.generateAudio(id, scriptContent);
         return ResponseEntity.accepted().build();

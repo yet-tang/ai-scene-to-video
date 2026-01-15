@@ -57,6 +57,36 @@
         placeholder="大家好，今天带大家看的这套是..."
         class="intro-input"
       />
+
+      <!-- 新增：片头卡片编辑区 -->
+      <div class="intro-card-editor" v-if="introCard">
+        <div class="field-row">
+          <van-field v-model="introCard.headline" label="片头标题" placeholder="小区名 · 户型" input-align="right" />
+        </div>
+        <div class="field-row">
+          <van-field v-model="introCard.specs" label="房源规格" placeholder="面积 | 装修" input-align="right" />
+        </div>
+        <div class="highlights-box">
+          <div class="highlights-label">核心卖点</div>
+          <div class="highlights-tags">
+            <van-tag
+              v-for="(tag, idx) in introCard.highlights"
+              :key="idx"
+              closeable
+              size="medium"
+              type="primary"
+              @close="introCard.highlights.splice(idx, 1)"
+              class="h-tag"
+            >
+              {{ tag }}
+            </van-tag>
+            <van-button size="mini" icon="plus" plain type="primary" @click="addHighlight" class="add-tag-btn">
+              添加
+            </van-button>
+          </div>
+        </div>
+      </div>
+
       <div class="intro-tips">
         <span>建议 30-50 字，包含小区名、户型、一个亮点</span>
         <span class="intro-length" :class="{ warning: introText.length > 60 }">{{ introText.length }} 字</span>
@@ -242,6 +272,11 @@ const mockAssets = computed(() => Number(route.query.mockAssets ?? 5))
 
 const assets = ref<UIAsset[]>([])
 const introText = ref('')  // 片头开场白文案
+const introCard = ref({
+    headline: '',
+    specs: '',
+    highlights: [] as string[]
+})
 const isScriptGenerating = ref(false)
 const isRendering = ref(false)
 let timelinePollTimer: any = null
@@ -296,6 +331,7 @@ onMounted(async () => {
     const globalScript = projectStore.currentProject.script || ''
     const distributed = distributeScript(globalScript, storeAssets.length, storeAssets)
     introText.value = distributed.intro
+    introCard.value = distributed.card
     assets.value = storeAssets.map((a, i) => ({
       ...a,
       script: distributed.scripts[i] || ''
@@ -422,8 +458,12 @@ const processShowProgress = computed(() => {
   return true
 })
 
-const distributeScript = (text: string, count: number, assetsList: Asset[] = []): { intro: string, scripts: string[] } => {
-    const result = { intro: '', scripts: new Array(count).fill('') }
+const distributeScript = (text: string, count: number, assetsList: Asset[] = []): { intro: string, card: any, scripts: string[] } => {
+    const result = { 
+        intro: '', 
+        card: { headline: '', specs: '', highlights: [] },
+        scripts: new Array(count).fill('') 
+    }
     if (count <= 0) return result
     if (!text) return result
     
@@ -452,9 +492,10 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
         const data = JSON.parse(cleanText)
         console.log('JSON parsed successfully:', typeof data)
         
-        // New format: { intro_text: "...", segments: [...] }
+        // New format: { intro_text: "...", intro_card: {...}, segments: [...] }
         if (data && typeof data === 'object' && !Array.isArray(data)) {
             result.intro = data.intro_text || ''
+            result.card = data.intro_card || { headline: '', specs: '', highlights: [] }
             const segments = data.segments || []
             console.log('New format detected, intro:', result.intro.slice(0, 50), 'segments:', segments.length)
             
@@ -476,13 +517,11 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
         // Old format: array
         if (Array.isArray(data)) {
             console.log('Old format (array) detected, length:', data.length)
-            // Map by asset_id
             const map: Record<string, string> = {}
-            data.forEach(item => {
+            data.forEach((item: any) => {
                 if (item.asset_id) map[item.asset_id] = item.text || ''
             })
             
-            // Return array matching assetsList order
             if (assetsList.length > 0) {
                 result.scripts = assetsList.map(a => map[a.id] || '')
             } else {
@@ -491,20 +530,16 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
             return result
         }
     } catch (e) {
-        // JSON parse failed, try to extract JSON from text
         console.warn('JSON parse failed:', e)
-        console.warn('Raw text (first 300 chars):', text.slice(0, 300))
-        
-        // Try to find and extract JSON object
         const jsonStart = cleanText.indexOf('{')
         const jsonEnd = cleanText.lastIndexOf('}')
         if (jsonStart !== -1 && jsonEnd > jsonStart) {
             try {
                 const jsonPart = cleanText.slice(jsonStart, jsonEnd + 1)
-                console.log('Trying to extract JSON from:', jsonPart.slice(0, 100))
                 const data = JSON.parse(jsonPart)
                 if (data && typeof data === 'object' && !Array.isArray(data)) {
                     result.intro = data.intro_text || ''
+                    result.card = data.intro_card || { headline: '', specs: '', highlights: [] }
                     const segments = data.segments || []
                     const map: Record<string, string> = {}
                     segments.forEach((item: any) => {
@@ -515,17 +550,13 @@ const distributeScript = (text: string, count: number, assetsList: Asset[] = [])
                     } else {
                         result.scripts = segments.map((item: any) => item.text || '').slice(0, count)
                     }
-                    console.log('JSON extraction successful!')
                     return result
                 }
-            } catch (e2) {
-                console.warn('JSON extraction also failed:', e2)
-            }
+            } catch (e2) {}
         }
     }
     
     console.warn('Falling back to plain text split')
-    // Plain text fallback: split by sentences
     const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
     
     if (sentences.length <= count) {
@@ -658,6 +689,7 @@ const startScriptPolling = () => {
       const fullScript = projectStore.currentProject.script
       const distributed = distributeScript(fullScript, assets.value.length, assets.value)
       introText.value = distributed.intro
+      introCard.value = distributed.card
       assets.value.forEach((a, i) => {
         if (distributed.scripts[i]) a.script = distributed.scripts[i]
       })
@@ -745,6 +777,14 @@ const onSceneConfirm = async ({ selectedOptions }: any) => {
   showPicker.value = false
 }
 
+const addHighlight = () => {
+  const val = window.prompt('请输入核心卖点标签')
+  if (val && val.trim()) {
+    if (!introCard.value.highlights) introCard.value.highlights = []
+    introCard.value.highlights.push(val.trim())
+  }
+}
+
 const onGenerateScript = async () => {
     if (isMock.value) {
       showToast('Mock 模式下不生成解说')
@@ -779,9 +819,10 @@ const onGenerateVideo = async () => {
     return
   }
   
-  // 组装新格式：包含 intro_text 和 segments
+  // 组装新格式：包含 intro_text, intro_card 和 segments
   const combinedScript = JSON.stringify({
     intro_text: introText.value || '',
+    intro_card: introCard.value,
     segments: scriptSegments
   })
   
@@ -841,6 +882,47 @@ const onGenerateVideo = async () => {
   font-size: 14px;
   line-height: 1.6;
   color: #334155;
+}
+
+.intro-card-editor {
+  margin-top: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  padding: 4px 0;
+}
+
+.intro-card-editor :deep(.van-field) {
+  background: transparent;
+  padding: 8px 0;
+}
+
+.highlights-box {
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.highlights-label {
+  font-size: 13px;
+  color: #64748b;
+  padding-left: 0;
+}
+
+.highlights-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.h-tag {
+  padding: 4px 8px;
+}
+
+.add-tag-btn {
+  height: 24px;
+  padding: 0 8px;
 }
 
 .intro-tips {

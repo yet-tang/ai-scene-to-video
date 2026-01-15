@@ -4,15 +4,9 @@ import json
 import re
 
 from config import Config
+from llm_client import create_llm_client, LITELLM_AVAILABLE
 
 logger = logging.getLogger(__name__)
-
-try:
-    import litellm
-    LITELLM_AVAILABLE = True
-except ImportError:
-    litellm = None
-    LITELLM_AVAILABLE = False
 
 class ScriptState(TypedDict):
     """
@@ -47,14 +41,15 @@ class MultiAgentScriptGenerator:
     使用简化的状态机模式（不依赖LangGraph，保持轻量）
     """
     
-    def __init__(self, llm_client):
+    def __init__(self, llm_client=None):
         """
         Initialize Multi-Agent Script Generator
         
         Args:
-            llm_client: LLM client instance (e.g., dashscope client or litellm client)
+            llm_client: Deprecated, now uses UnifiedLLMClient internally
         """
-        self.llm_client = llm_client
+        self.script_client = create_llm_client("script_agent")
+        self.orchestrator_client = create_llm_client("orchestrator_agent")
         self.max_iterations = Config.MULTI_AGENT_MAX_ITERATIONS
         self.quality_threshold = Config.MULTI_AGENT_QUALITY_THRESHOLD
     
@@ -288,46 +283,62 @@ class MultiAgentScriptGenerator:
         for idx, asset in enumerate(timeline_data):
             scenes.append({
                 'index': idx,
-                'scene': asset.get('scene_label', ''),
+                'asset_id': asset.get('id') or asset.get('asset_id') or f'asset-{idx}',
+                'scene': asset.get('scene_label', '未知场景'),
                 'emotion': asset.get('emotion', ''),
-                'features': asset.get('features', ''),
-                'shock_score': asset.get('shock_score', 0)
+                'duration': float(asset.get('duration', 5.0))
             })
         
         prompt = f"""# Role
-你是一位专业的房产短视频脚本创作者，擅长"温情生活风"的文案创作。
+你是一位具有10年经验、500万粉丝的资深探房博主，擅长创作"温情生活风"的短视频脚本，强调真实感和情感共鸣。
 
 # Task
-为以下房源创作一段视频解说脚本，要求自然、亲切、有感染力。
+根据提供的房源信息和视觉场景顺序，生成一段45-60秒的探房视频解说脚本。
 
 # 房源信息
 - 标题: {title}
 - 描述: {description}
+- 房源详细: {json.dumps(house_info, ensure_ascii=False)}
 
-# 视觉场景
+# 视觉场景 (按顺序)
 {json.dumps(scenes, ensure_ascii=False, indent=2)}
 
-# 脚本质量要求
-1. **开场钩子（前3秒）**：必须使用惊艳镜头或独特卖点吸引注意
-2. **真实槽点**：提及具体的数字、尺寸、亮点特色（如"270度落地窗"、"32㎡大客厅"）
-3. **情绪化表达**：使用生活化、有温度的语言，避免机械的描述
+# 脚本结构要求
+必须包含以下三个部分：
+1. **开场白 (intro_text)**: 大家好 + 房源简介 + 引导语。要求极具吸引力，前3秒必须抓住观众。
+2. **片头卡片 (intro_card)**: 结构化信息，用于视频开头的视觉展示。
+3. **分段解说词 (segments)**: 对应每个视觉场景，必须包含 asset_id。
+
+# 质量准则
+1. **开场钩子**: 使用价格、位置或独特反差作为开头（如"358万！居然能在滨江买到三房？"）。
+2. **真实槽点**: 提及具体的数字、尺寸或亮点（如"270度落地窗"、"32㎡大客厅"）。
+3. **情绪化表达**: 使用生活化、有温度的语言（如"阳光洒满客厅"、"治愈感拉满"）。
+4. **字数控制**: 严格遵守时长限制，每秒约3-4个字。
 
 # Output Format
-请输出JSON格式的脚本，包含以下字段：
+必须返回 JSON 格式，如下所示：
 ```json
 {{
+  "intro_text": "大家好，今天带大家看的是...",
+  "intro_card": {{
+    "headline": "位置·小区名",
+    "specs": "面积 | 户型",
+    "highlights": ["卖点1", "卖点2", "卖点3"]
+  }},
   "segments": [
     {{
-      "asset_id": "asset-001",
-      "text": "解说文案",
+      "asset_id": "asset-xxx",
+      "text": "这段场景的解说词...",
       "emotion": "惊艳/温馨/普通",
-      "duration": 3.5
+      "duration": 5.0,
+      "visual_prompt": "English visual description for enhancement",
+      "audio_cue": "SFX suggestion"
     }}
   ]
 }}
 ```
 
-请直接输出JSON，不要包含其他内容。
+请直接输出 JSON，不要包含 Markdown 代码块标记或其他解释。
 """
         return prompt
     
@@ -341,9 +352,7 @@ class MultiAgentScriptGenerator:
 请根据以下反馈改进脚本，修复质量问题。
 
 # 当前脚本
-```json
 {current_script}
-```
 
 # 质量问题
 {issues_text}
@@ -351,8 +360,10 @@ class MultiAgentScriptGenerator:
 # 改进建议
 {feedback}
 
-# Output
-请输出改进后的完整脚本（JSON格式），直接输出JSON，不要包含其他内容。
+# Output Requirement
+1. 必须保持原有的 JSON 结构（包含 intro_text, intro_card, segments）。
+2. 确保 asset_id 与原脚本一一对应，不要修改。
+3. 请直接输出改进后的完整 JSON，不要包含 Markdown 标记。
 """
         return prompt
     
@@ -361,20 +372,15 @@ class MultiAgentScriptGenerator:
         调用LLM生成脚本
         """
         try:
-            # Use LiteLLM for unified interface
-            if not LITELLM_AVAILABLE:
-                raise ImportError("litellm is not installed")
-            
-            response = litellm.completion(
-                model="dashscope/qwen-plus",  # LiteLLM format
+            # Use UnifiedLLMClient for standardized logging and fallback
+            response_text = self.script_client.chat(
                 messages=[
                     {"role": "system", "content": "你是一位专业的房产视频脚本创作者，只输出JSON格式的脚本。"},
                     {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
+                ]
             )
             
-            script_text = response.choices[0].message.content.strip()
+            script_text = response_text.strip()
             
             # Clean up markdown code blocks if present
             script_text = re.sub(r'^```json\s*', '', script_text)
@@ -386,9 +392,9 @@ class MultiAgentScriptGenerator:
             return script_text
             
         except Exception as e:
-            logger.error(f"LLM call failed: {e}")
+            logger.error(f"LLM call failed: {e}", extra={"event": "agent.llm.failed", "error": str(e)})
             raise
-    
+
     def _perform_quality_check(self, script_data: Dict, house_info: Dict) -> Dict:
         """
         执行脚本质量检查
@@ -500,29 +506,59 @@ class MultiAgentScriptGenerator:
     
     def _generate_improvement_feedback(self, issues: List[Dict], current_script: str) -> str:
         """
-        生成改进建议
+        使用总导演Agent生成改进建议
         """
         if not issues:
             return "脚本质量良好，无需改进。"
         
-        feedback_parts = ["请针对以下问题进行改进：\n"]
+        issues_json = json.dumps(issues, ensure_ascii=False, indent=2)
         
-        for idx, issue in enumerate(issues):
-            issue_type = issue['type']
-            description = issue['description']
+        prompt = f"""# Role
+你是一位资深房产视频导演，负责审核并改进脚本质量。
+
+# Task
+分析评审提出的质量问题，为脚本作者提供具体的改进指导。
+
+# 质量问题
+{issues_json}
+
+# 当前脚本内容
+{current_script}
+
+# 要求
+1. 给出具体的改写建议，而不是笼统的方向。
+2. 重点关注如何增强开场钩子、增加真实细节、提升情感共鸣。
+3. 直接给出建议内容，语气专业。
+"""
+        try:
+            feedback = self.orchestrator_client.chat(
+                messages=[
+                    {"role": "system", "content": "你是一位资深的短视频导演，负责指导脚本优化。"},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return feedback
+        except Exception as e:
+            logger.warning(f"DirectorAgent LLM call failed, using rule-based feedback: {e}")
+            # Fallback to rule-based feedback
+            feedback_parts = ["请针对以下问题进行改进：\n"]
+            # ... (rest of old logic as fallback)
+            for idx, issue in enumerate(issues):
+                issue_type = issue['type']
+                description = issue['description']
+                
+                if issue_type == 'opening_hook':
+                    feedback_parts.append(f"{idx+1}. 开场钩子问题：{description}\n   建议：使用第一个惊艳镜头（如江景、大空间）作为开场，配合感叹或提问句式。")
+                elif issue_type == 'specific_details':
+                    feedback_parts.append(f'{idx+1}. 真实槽点问题：{description}\n   建议：添加具体的数字（如"32㎡大客厅"、"270度全景窗"）。')
+                elif issue_type == 'emotional_expression':
+                    feedback_parts.append(f'{idx+1}. 情绪化表达问题：{description}\n   建议：使用生活化语言（如"阳光洒满客厅，温暖每一个清晨"）。')
+                elif issue_type == 'structure':
+                    feedback_parts.append(f"{idx+1}. 结构问题：{description}\n   建议：确保所有字段完整，时长控制在15-60秒。")
+                else:
+                    feedback_parts.append(f"{idx+1}. {description}")
             
-            if issue_type == 'opening_hook':
-                feedback_parts.append(f"{idx+1}. 开场钩子问题：{description}\n   建议：使用第一个惊艳镜头（如江景、大空间）作为开场，配合感叹或提问句式。")
-            elif issue_type == 'specific_details':
-                feedback_parts.append(f'{idx+1}. 真实槽点问题：{description}\n   建议：添加具体的数字（如"32㎡大客厅"、"270度全景窗"）。')
-            elif issue_type == 'emotional_expression':
-                feedback_parts.append(f'{idx+1}. 情绪化表达问题：{description}\n   建议：使用生活化语言（如"阳光洒满客厅，温暖每一个清晨"）。')
-            elif issue_type == 'structure':
-                feedback_parts.append(f"{idx+1}. 结构问题：{description}\n   建议：确保所有字段完整，时长控制在15-60秒。")
-            else:
-                feedback_parts.append(f"{idx+1}. {description}")
-        
-        return "\n".join(feedback_parts)
+            return "\n".join(feedback_parts)
     
     def _create_fallback_script(self, timeline_data: List[Dict]) -> str:
         """
@@ -531,11 +567,23 @@ class MultiAgentScriptGenerator:
         segments = []
         for idx, asset in enumerate(timeline_data):
             segment = {
-                "asset_id": asset.get('id', f'asset-{idx}'),
+                "asset_id": asset.get('id') or asset.get('asset_id') or f'asset-{idx}',
                 "text": asset.get('scene_label', '精彩镜头'),
                 "emotion": asset.get('emotion', '普通'),
-                "duration": float(asset.get('duration', 3.0))
+                "duration": float(asset.get('duration', 3.0)),
+                "visual_prompt": "Standard interior shot",
+                "audio_cue": None
             }
             segments.append(segment)
         
-        return json.dumps({"segments": segments}, ensure_ascii=False, indent=2)
+        fallback = {
+            "intro_text": "大家好，今天带大家看一套精选房源，一起来看看吧。",
+            "intro_card": {
+                "headline": "精选房源",
+                "specs": "优质户型",
+                "highlights": ["精装修", "采光好"]
+            },
+            "segments": segments
+        }
+        
+        return json.dumps(fallback, ensure_ascii=False, indent=2)

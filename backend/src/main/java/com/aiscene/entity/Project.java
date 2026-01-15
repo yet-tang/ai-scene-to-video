@@ -41,8 +41,10 @@ public class Project {
     @Enumerated(EnumType.STRING)
     private ProjectStatus status;
 
-    @Column(name = "script_content", columnDefinition = "text")
-    private String scriptContent;
+    @Column(name = "script_content", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @ColumnTransformer(write = "?::jsonb")
+    private JsonNode scriptContent;
 
     @Column(name = "audio_url")
     private String audioUrl;

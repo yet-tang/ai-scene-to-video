@@ -170,7 +170,12 @@ public class ProjectService {
     public void generateAudio(UUID projectId, String scriptContent) {
         // Optional: Update script content in DB if user edited it
         Project project = getProject(projectId);
-        project.setScriptContent(scriptContent);
+        try {
+            JsonNode scriptNode = scriptContent != null ? objectMapper.readTree(scriptContent) : null;
+            project.setScriptContent(scriptNode);
+        } catch (Exception e) {
+            throw new RuntimeException("Invalid script content format", e);
+        }
         project.setStatus(ProjectStatus.AUDIO_GENERATING);
         projectRepository.save(project);
         
@@ -190,7 +195,12 @@ public class ProjectService {
         ) {
             throw new IllegalStateException("Project is processing");
         }
-        project.setScriptContent(scriptContent);
+        try {
+            JsonNode scriptNode = scriptContent != null ? objectMapper.readTree(scriptContent) : null;
+            project.setScriptContent(scriptNode);
+        } catch (Exception e) {
+            throw new RuntimeException("Invalid script content format", e);
+        }
         project.setStatus(ProjectStatus.SCRIPT_GENERATED);
         projectRepository.save(project);
     }
@@ -198,10 +208,12 @@ public class ProjectService {
     @Transactional
     public void renderVideo(UUID projectId) {
         Project project = getProject(projectId);
-        String scriptContent = project.getScriptContent();
-        if (scriptContent == null || scriptContent.trim().isEmpty()) {
+        JsonNode scriptNode = project.getScriptContent();
+        if (scriptNode == null || scriptNode.isNull() || scriptNode.isEmpty()) {
             throw new IllegalStateException("Script content is empty");
         }
+        
+        String scriptContent = scriptNode.isTextual() ? scriptNode.asText() : scriptNode.toString();
 
         List<Asset> assets = assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
         if (assets.isEmpty()) {

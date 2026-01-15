@@ -2,6 +2,7 @@ package com.aiscene.dto;
 
 import com.aiscene.entity.Asset;
 import com.aiscene.entity.ProjectStatus;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Builder;
 import lombok.Data;
 
@@ -16,5 +17,5 @@ public class TimelineResponse {
     private String errorRequestId;
     private String errorStep;
     private List<Asset> assets;
-    private String scriptContent;
+    private JsonNode scriptContent;
 }

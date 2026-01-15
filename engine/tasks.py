@@ -886,7 +886,7 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
                 with conn.cursor() as cursor:
                     update_query = """
                         UPDATE projects 
-                        SET script_content = %s,
+                        SET script_content = %s::jsonb,
                             status = 'SCRIPT_GENERATED'
                         WHERE id = %s
                     """

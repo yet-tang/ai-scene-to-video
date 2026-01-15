@@ -10,7 +10,9 @@ import com.aiscene.entity.ProjectStatus;
 import com.aiscene.repository.AssetRepository;
 import com.aiscene.repository.ProjectRepository;
 import com.aiscene.config.BgmConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.TextNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -238,17 +240,19 @@ class ProjectServiceTest {
     }
 
     @Test
-    void generateAudio_updatesScriptAndSubmitsTask() {
+    void generateAudio_updatesScriptAndSubmitsTask() throws Exception {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        JsonNode scriptNode = new TextNode("s");
+        when(objectMapper.readTree("s")).thenReturn(scriptNode);
 
         projectService.generateAudio(projectId, "s");
 
         ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(captor.capture());
-        assertThat(captor.getValue().getScriptContent()).isEqualTo("s");
+        assertThat(captor.getValue().getScriptContent()).isEqualTo(scriptNode);
         assertThat(captor.getValue().getStatus()).isEqualTo(ProjectStatus.AUDIO_GENERATING);
         verify(taskQueueService).submitAudioGenerationTask(projectId, "s");
     }
@@ -256,7 +260,9 @@ class ProjectServiceTest {
     @Test
     void renderVideo_submitsRenderPipelineTask() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("content").build();
+        // Use an ObjectNode as it's more representative and less likely to trigger isEmpty() incorrectly
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "content");
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
 
@@ -266,7 +272,7 @@ class ProjectServiceTest {
 
         projectService.renderVideo(projectId);
 
-        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("content"), any(List.class), any());
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq(scriptNode.toString()), any(List.class), any());
         verify(projectRepository).updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING));
     }
 
@@ -430,15 +436,17 @@ class ProjectServiceTest {
     }
 
     @Test
-    void updateScriptContent_updatesStatusAndSaves() {
+    void updateScriptContent_updatesStatusAndSaves() throws Exception {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        JsonNode scriptNode = new TextNode("s");
+        when(objectMapper.readTree("s")).thenReturn(scriptNode);
 
         projectService.updateScriptContent(projectId, "s");
 
-        assertThat(project.getScriptContent()).isEqualTo("s");
+        assertThat(project.getScriptContent()).isEqualTo(scriptNode);
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.SCRIPT_GENERATED);
         verify(projectRepository).save(project);
     }
@@ -446,7 +454,7 @@ class ProjectServiceTest {
     @Test
     void renderVideo_throwsWhenScriptEmpty() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(" ").build();
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(null).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
         assertThatThrownBy(() -> projectService.renderVideo(projectId))
@@ -458,7 +466,8 @@ class ProjectServiceTest {
     @Test
     void renderVideo_throwsWhenNoAssets() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("c").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "c");
+        Project project = Project.builder().id(projectId).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of());
 
@@ -471,7 +480,8 @@ class ProjectServiceTest {
     @Test
     void renderVideo_throwsProcessingWhenStatusUpdateRejectedButAlreadyRendering() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).status(ProjectStatus.RENDERING).scriptContent("c").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "c");
+        Project project = Project.builder().id(projectId).status(ProjectStatus.RENDERING).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
                 Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
@@ -486,7 +496,8 @@ class ProjectServiceTest {
     @Test
     void renderVideo_throwsNotReadyWhenStatusUpdateRejected() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).scriptContent("c").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "c");
+        Project project = Project.builder().id(projectId).status(ProjectStatus.DRAFT).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
                 Asset.builder().id(UUID.randomUUID()).ossUrl("u").duration(1.0).build()
@@ -590,15 +601,17 @@ class ProjectServiceTest {
     }
 
     @Test
-    void updateScriptContentWithUserId_updatesWhenOwnerMatches() {
+    void updateScriptContentWithUserId_updatesWhenOwnerMatches() throws Exception {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        JsonNode scriptNode = new TextNode("new script");
+        when(objectMapper.readTree("new script")).thenReturn(scriptNode);
 
         projectService.updateScriptContent(projectId, "new script", 123L);
 
-        assertThat(project.getScriptContent()).isEqualTo("new script");
+        assertThat(project.getScriptContent()).isEqualTo(scriptNode);
         assertThat(project.getStatus()).isEqualTo(ProjectStatus.SCRIPT_GENERATED);
         verify(projectRepository).save(project);
     }
@@ -616,22 +629,25 @@ class ProjectServiceTest {
     }
 
     @Test
-    void updateScriptContentWithUserId_allowsWhenUserIdIsNull() {
+    void updateScriptContentWithUserId_allowsWhenUserIdIsNull() throws Exception {
         UUID projectId = UUID.randomUUID();
         Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.DRAFT).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.save(any(Project.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        JsonNode scriptNode = new TextNode("new script");
+        when(objectMapper.readTree("new script")).thenReturn(scriptNode);
 
         projectService.updateScriptContent(projectId, "new script", null);
 
-        assertThat(project.getScriptContent()).isEqualTo("new script");
+        assertThat(project.getScriptContent()).isEqualTo(scriptNode);
         verify(projectRepository).save(project);
     }
 
     @Test
     void retryRender_rendersWhenOwnerMatches() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "script");
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
@@ -640,14 +656,15 @@ class ProjectServiceTest {
 
         projectService.retryRender(projectId, 123L);
 
-        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("script"), any(List.class), any());
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq(scriptNode.toString()), any(List.class), any());
         verify(projectRepository).updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING));
     }
 
     @Test
     void retryRender_throwsWhenOwnerDoesNotMatch() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "script");
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
 
         assertThatThrownBy(() -> projectService.retryRender(projectId, 456L))
@@ -659,7 +676,8 @@ class ProjectServiceTest {
     @Test
     void retryRender_allowsWhenUserIdIsNull() {
         UUID projectId = UUID.randomUUID();
-        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("script").build();
+        JsonNode scriptNode = new ObjectMapper().createObjectNode().put("segments", "script");
+        Project project = Project.builder().id(projectId).userId(123L).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
         when(projectRepository.updateStatusIfIn(eq(projectId), any(), eq(ProjectStatus.RENDERING))).thenReturn(1);
         when(assetRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId)).thenReturn(List.of(
@@ -668,7 +686,7 @@ class ProjectServiceTest {
 
         projectService.retryRender(projectId, null);
 
-        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq("script"), any(List.class), any());
+        verify(taskQueueService).submitRenderPipelineTask(eq(projectId), eq(scriptNode.toString()), any(List.class), any());
     }
 
     @Test

@@ -13,6 +13,7 @@ import com.aiscene.entity.ProjectStatus;
 import com.aiscene.entity.RenderJob;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.TextNode;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -162,13 +163,14 @@ class PojoCoverageTest {
         ProjectListItemResponse listItem2 = new ProjectListItemResponse(projectId, "p", ProjectStatus.DRAFT, houseInfo, now, null, null, null);
         assertThat(listItem2.equals(listItem)).isTrue();
 
+        JsonNode scriptNode = new TextNode("s");
         Project project = Project.builder()
                 .id(projectId)
                 .userId(2L)
                 .title("p")
                 .houseInfo(houseInfo)
                 .status(ProjectStatus.DRAFT)
-                .scriptContent("s")
+                .scriptContent(scriptNode)
                 .finalVideoUrl("u")
                 .createdAt(now)
                 .build();
@@ -182,7 +184,7 @@ class PojoCoverageTest {
         project2.setTitle("p");
         project2.setHouseInfo(houseInfo);
         project2.setStatus(ProjectStatus.DRAFT);
-        project2.setScriptContent("s");
+        project2.setScriptContent(scriptNode);
         project2.setFinalVideoUrl("u");
         project2.setCreatedAt(now);
         assertThat(project2.equals(project)).isTrue();

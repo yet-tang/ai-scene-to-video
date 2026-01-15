@@ -10,6 +10,8 @@ import com.aiscene.entity.ProjectStatus;
 import com.aiscene.dto.UpdateAssetRequest;
 import com.aiscene.service.ProjectService;
 import com.aiscene.service.StorageService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockMultipartFile;
@@ -242,7 +244,8 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
-        Project project = Project.builder().id(id).scriptContent("s").build();
+        JsonNode scriptNode = new TextNode("s");
+        Project project = Project.builder().id(id).scriptContent(scriptNode).build();
         when(projectService.getProject(id)).thenReturn(project);
 
         var resp = controller.generateAudio(id, null);
@@ -258,7 +261,8 @@ class ProjectControllerTest {
         ProjectController controller = new ProjectController(projectService, storageService);
 
         UUID id = UUID.randomUUID();
-        Project project = Project.builder().id(id).status(ProjectStatus.SCRIPT_GENERATED).scriptContent("s").build();
+        JsonNode scriptNode = new TextNode("s");
+        Project project = Project.builder().id(id).status(ProjectStatus.SCRIPT_GENERATED).scriptContent(scriptNode).build();
         when(projectService.getProject(id)).thenReturn(project);
 
         var resp = controller.getScript(id);
@@ -267,7 +271,7 @@ class ProjectControllerTest {
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().get("projectId")).isEqualTo(id.toString());
         assertThat(resp.getBody().get("status")).isEqualTo("SCRIPT_GENERATED");
-        assertThat(resp.getBody().get("scriptContent")).isEqualTo("s");
+        assertThat(resp.getBody().get("scriptContent")).isEqualTo(scriptNode);
     }
 
     @Test
