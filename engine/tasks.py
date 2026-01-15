@@ -902,18 +902,10 @@ def generate_script_task(self, project_id: str, house_info: dict, timeline_data:
 def _validate_opening_hook(script_content: str, house_info: dict) -> dict:
     """
     Validate opening hook strength based on viral video formula.
-    
-    Quality criteria:
-    1. Must contain price (XXX万)
-    2. Must contain location/community (from house_info)
-    3. Must contain contrast/surprise element (居然/竟然/？)
-    
-    Returns:
-        dict with keys:
-        - passed: bool
-        - reason: str (if failed)
-        - strength: int (1-10, if passed)
     """
+    if isinstance(script_content, (dict, list)):
+        script_content = json.dumps(script_content)
+    
     try:
         data = json.loads(script_content)
         
@@ -985,14 +977,11 @@ def _validate_opening_hook(script_content: str, house_info: dict) -> dict:
 def _detect_video_style(script_content: str, timeline_assets: list) -> str:
     """
     检测视频风格（Phase 2-2新增）
-    
-    策略：
-    1. 统计timeline_assets中emotion标签分布
-    2. 根据主导情绪判断风格
-    
-    Returns:
-        stunning/cozy/healing
     """
+    if isinstance(script_content, (dict, list)):
+        script_content = json.dumps(script_content)
+    
+    # 策略：
     emotion_distribution = _calculate_emotion_distribution(timeline_assets)
     
     if not emotion_distribution:
@@ -1012,10 +1001,10 @@ def _detect_video_style(script_content: str, timeline_assets: list) -> str:
 def _extract_keywords_from_script(script_content: str) -> list:
     """
     从脚本中提取关键词（Phase 2-2新增）
-    
-    Returns:
-        List of keywords
     """
+    if isinstance(script_content, (dict, list)):
+        script_content = json.dumps(script_content)
+    
     keywords = []
     
     # Common real estate keywords
@@ -1051,14 +1040,10 @@ def _calculate_emotion_distribution(timeline_assets: list) -> dict:
 def _parse_and_align_segments(project_id: str, script_content: str):
     """
     Fetch assets, parse script (JSON/Text), and prepare for audio generation.
-    
-    Returns:
-        Tuple of (segments, timeline_assets, intro_text, intro_card)
-        - segments: List of dicts with text, duration, asset_id, oss_url
-        - timeline_assets: List of asset metadata
-        - intro_text: Opening voice-over text for intro (may be empty)
-        - intro_card: Structured intro card data (headline, specs, highlights) or None
     """
+    if isinstance(script_content, (dict, list)):
+        script_content = json.dumps(script_content)
+    
     # Fetch assets to get durations
     conn = psycopg2.connect(Config.DB_DSN)
     timeline_assets = []
@@ -1249,7 +1234,7 @@ def render_video_task(self, project_id: str, _timeline_assets: list, _audio_path
         try:
             with conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT script_content, title, description FROM projects WHERE id = %s", (project_id,))
+                    cursor.execute("SELECT script_content::text, title, description FROM projects WHERE id = %s", (project_id,))
                     row = cursor.fetchone()
                     if row:
                         script_content = row[0]

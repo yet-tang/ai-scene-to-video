@@ -101,6 +101,7 @@ celery_app.conf.update(
     task_default_queue=Config.CELERY_QUEUE_NAME,
     task_queues=(Queue(Config.CELERY_QUEUE_NAME),),
     task_create_missing_queues=True,
+    broker_connection_retry_on_startup=True,
 )
 
 @signals.task_prerun.connect

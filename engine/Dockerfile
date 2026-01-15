@@ -88,6 +88,12 @@ RUN echo "=== Engine Build Info ===" && \
     echo "GIT_COMMIT: $GIT_COMMIT" && \
     echo "BUILD_TIME: $BUILD_TIME" && \
     echo "========================="
+    
+# Create a non-root user for security
+RUN groupadd -r celerygroup && useradd -r -g celerygroup -d /app -s /sbin/nologin celeryuser && \
+    chown -R celeryuser:celerygroup /app
+
+USER celeryuser
 
 # Start Celery Worker
 # Concurrency can be controlled via CELERY_WORKER_CONCURRENCY env var (default: 2 for 4GB VPS)
