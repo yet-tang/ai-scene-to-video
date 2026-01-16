@@ -107,6 +107,63 @@ services:
     networks:
       - coolify
 
+  # Admin Management Services
+  admin-backend:
+    image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-admin-backend:${IMAGE_TAG:-latest}
+    container_name: admin-backend
+    ports:
+      - "8091:8091"
+    environment:
+      - SERVER_PORT=8091
+      # Database - shares same database as main backend
+      - SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL}
+      - SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD}
+      # Redis
+      - SPRING_REDIS_URL=${SPRING_REDIS_URL}
+      # JWT Configuration
+      - JWT_SECRET=${ADMIN_JWT_SECRET}
+      - JWT_EXPIRATION=${ADMIN_JWT_EXPIRATION:-86400000}
+      # Flower URL for Celery monitoring
+      - ADMIN_FLOWER_BASE_URL=${ADMIN_FLOWER_BASE_URL:-http://flower:5555}
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - ai-scene-backend
+    networks:
+      - coolify
+
+  admin-frontend:
+    image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-admin-frontend:${IMAGE_TAG:-latest}
+    container_name: admin-frontend
+    ports:
+      - "3001:80"
+    restart: always
+    depends_on:
+      - admin-backend
+    networks:
+      - coolify
+
+  # Flower - Celery monitoring dashboard
+  flower:
+    image: mher/flower:2.0
+    container_name: flower
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=${SPRING_REDIS_URL}
+      - FLOWER_PORT=5555
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH:-admin:admin}
+    restart: always
+    depends_on:
+      - ai-scene-engine
+    networks:
+      - coolify
+
 networks:
   coolify:
     external: true

@@ -1,0 +1,132 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-scene-db
+    environment:
+      - POSTGRES_DB=ai_scene
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-scene-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-scene-backend
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/ai_scene
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_REDIS_URL=redis://redis:6379/0
+      - S3_STORAGE_ENDPOINT=${S3_STORAGE_ENDPOINT}
+      - S3_STORAGE_ACCESS_KEY=${S3_STORAGE_ACCESS_KEY}
+      - S3_STORAGE_SECRET_KEY=${S3_STORAGE_SECRET_KEY}
+      - S3_STORAGE_BUCKET=${S3_STORAGE_BUCKET}
+      - S3_STORAGE_PUBLIC_URL=${S3_STORAGE_PUBLIC_URL}
+    ports:
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: ai-scene-engine
+    environment:
+      - DB_DSN=postgresql://postgres:postgres@postgres:5432/ai_scene
+      - REDIS_URL=redis://redis:6379/0
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - S3_STORAGE_ENDPOINT=${S3_STORAGE_ENDPOINT}
+      - S3_STORAGE_ACCESS_KEY=${S3_STORAGE_ACCESS_KEY}
+      - S3_STORAGE_SECRET_KEY=${S3_STORAGE_SECRET_KEY}
+      - S3_STORAGE_BUCKET=${S3_STORAGE_BUCKET}
+      - VOLCENGINE_API_KEY=${VOLCENGINE_API_KEY}
+      - GROK_API_KEY=${GROK_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=http://localhost:8090
+    container_name: ai-scene-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+  # Admin Management Services
+  admin-backend:
+    build:
+      context: ./admin-backend
+      dockerfile: Dockerfile
+    container_name: admin-backend
+    environment:
+      - SERVER_PORT=8091
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/ai_scene
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${ADMIN_JWT_SECRET:-local_dev_jwt_secret_at_least_32_chars}
+      - JWT_EXPIRATION=86400000
+      - ADMIN_FLOWER_BASE_URL=http://flower:5555
+    ports:
+      - "8091:8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  admin-frontend:
+    build:
+      context: ./admin-frontend
+      dockerfile: Dockerfile
+    container_name: admin-frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - admin-backend
+
+  flower:
+    image: mher/flower:2.0
+    container_name: flower
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - FLOWER_PORT=5555
+      - FLOWER_BASIC_AUTH=admin:admin
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
