@@ -362,6 +362,7 @@ const loadData = async () => {
     
     const distributed = distributeScript(globalScript, storeAssets.length, storeAssets)
     introText.value = distributed.intro
+    introCard.value = distributed.card  // 修复：添加缺失的 introCard 赋值
     
     assets.value = storeAssets.map((a, i) => ({
         ...a,
@@ -458,14 +459,19 @@ const processShowProgress = computed(() => {
   return true
 })
 
-const distributeScript = (text: string, count: number, assetsList: Asset[] = []): { intro: string, card: any, scripts: string[] } => {
+const distributeScript = (text: string | null | undefined, count: number, assetsList: Asset[] = []): { intro: string, card: any, scripts: string[] } => {
     const result = { 
         intro: '', 
         card: { headline: '', specs: '', highlights: [] },
         scripts: new Array(count).fill('') 
     }
     if (count <= 0) return result
-    if (!text) return result
+    
+    // 修复：先检查 text 类型，确保是字符串
+    if (!text || typeof text !== 'string') {
+        console.warn('[distributeScript] Invalid text input:', typeof text)
+        return result
+    }
     
     // Clean up text before parsing
     let cleanText = text.trim()
@@ -689,10 +695,22 @@ const startScriptPolling = () => {
 
     await projectStore.fetchProject(projectId)
     
+    // 直接从 store 读取最新状态，避免 computed 延迟
+    const latestStatus = projectStore.currentProject.status
+    console.log('[ScriptPoll] Latest status:', latestStatus)
+    
     // 如果达到或超过已生成状态，更新数据并停止
-    if (isScriptDoneStatus(projectStatus.value)) {
+    if (isScriptDoneStatus(latestStatus)) {
       const fullScript = projectStore.currentProject.script
+      console.log('[ScriptPoll] Full script (first 200 chars):', fullScript?.slice(0, 200))
+      
       const distributed = distributeScript(fullScript, assets.value.length, assets.value)
+      console.log('[ScriptPoll] Distributed:', {
+        introLength: distributed.intro.length,
+        cardHeadline: distributed.card.headline,
+        scriptsCount: distributed.scripts.filter(s => s).length
+      })
+      
       introText.value = distributed.intro
       introCard.value = distributed.card
       assets.value.forEach((a, i) => {

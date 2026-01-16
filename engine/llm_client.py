@@ -204,7 +204,7 @@ class UnifiedLLMClient:
             return response.choices[0].message.content
         
         except Exception as e:
-            logger.warning(
+            logger.error(
                 f"LLM call failed: {type(e).__name__}: {str(e)[:200]}",
                 extra={
                     "event": "llm.call.failed",
@@ -285,6 +285,7 @@ class UnifiedLLMClient:
                     "event": "llm.multimodal.success",
                     "agent": self.agent_name,
                     "model": model,
+                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                 }
@@ -411,6 +412,7 @@ class UnifiedLLMClient:
                     "event": "llm.fallback.success",
                     "agent": self.agent_name,
                     "model": fallback_model,
+                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                 }
