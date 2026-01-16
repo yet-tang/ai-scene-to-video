@@ -3,6 +3,7 @@ version: '3.8'
 services:
   ai-scene-backend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-backend:${IMAGE_TAG:-latest}
+    pull_policy: always  # 强制每次拉取最新镜像
     container_name: ai-scene-backend
     ports:
       - "8090:8090"
@@ -34,6 +35,7 @@ services:
 
   ai-scene-engine:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-engine:${IMAGE_TAG:-latest}
+    pull_policy: always  # 强制每次拉取最新镜像
     container_name: ai-scene-engine
     environment:
       # Redis Connection (Same as backend)
@@ -93,6 +95,7 @@ services:
 
   ai-scene-frontend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always  # 强制每次拉取最新镜像
     environment:
       # Frontend build args are baked into the image during GitHub Actions build
       # These env vars are for runtime reference only (not used by Nginx)
@@ -110,6 +113,7 @@ services:
   # Admin Management Services
   admin-backend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-admin-backend:${IMAGE_TAG:-latest}
+    pull_policy: always  # 强制每次拉取最新镜像
     container_name: admin-backend
     ports:
       - "8091:8091"
@@ -139,6 +143,7 @@ services:
 
   admin-frontend:
     image: ${DOCKER_REGISTRY:-ghcr.io}/${DOCKER_IMAGE_PREFIX:-ai-scene}-admin-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always  # 强制每次拉取最新镜像
     container_name: admin-frontend
     ports:
       - "3001:80"

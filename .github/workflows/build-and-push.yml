@@ -128,3 +128,38 @@ jobs:
           echo "Full Tags:"
           echo "${{ steps.meta.outputs.tags }}"
           echo "====================="
+
+  # 所有服务构建完成后，触发 Coolify 重新部署
+  trigger-coolify-deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Trigger Coolify Deployment
+        run: |
+          echo "触发 Coolify 重新部署..."
+          
+          # 调用 Coolify Webhook
+          response=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+          
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          
+          # 检查响应状态码
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "✅ Coolify 部署已触发成功"
+          else
+            echo "❌ Coolify 部署触发失败 (HTTP $http_code)"
+            exit 1
+          fi
+      
+      - name: Deployment notification
+        run: |
+          echo "=== 部署状态 ==="
+          echo "所有服务镜像已推送到 GHCR"
+          echo "Coolify 将自动拉取最新的 latest 镜像并重新部署"
+          echo "预计 2-5 分钟后生效"
+          echo "=================="

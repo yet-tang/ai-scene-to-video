@@ -50,11 +50,35 @@
 # Frontend 构建参数（必填）
 VITE_API_BASE_URL=https://your-api-domain.com
 VITE_API_KEY=your_frontend_api_key
+
+# Coolify Webhook（自动触发部署，必填）
+COOLIFY_WEBHOOK_URL=https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
 ```
+
+**如何获取 Coolify Webhook URL**：
+1. 登录 Coolify 控制台
+2. 进入你的项目 → **Webhooks** 页面
+3. 复制 **Deploy Webhook URL**
+4. 将 URL 粘贴到 GitHub Secrets 中
 
 **注意**: `GITHUB_TOKEN` 无需手动配置，GitHub Actions 会自动注入。
 
-#### 步骤 3：触发首次构建
+#### 步骤 3：配置自动部署
+
+本项目已配置 **GitHub Actions 自动触发 Coolify 部署**，无需手动操作。
+
+**工作流程**：
+1. 推送代码到 `main` 分支
+2. GitHub Actions 自动构建所有服务的 Docker 镜像
+3. 镜像推送到 GHCR (GitHub Container Registry)
+4. **自动调用 Coolify Webhook，触发重新部署**
+5. Coolify 拉取最新的 `latest` 镜像并重启服务
+
+**验证自动部署**：
+- 推送代码后，进入 GitHub Actions 查看 `trigger-coolify-deploy` 步骤
+- 应该看到 "✅ Coolify 部署已触发成功"
+
+#### 步骤 4：触发首次构建
 
 推送代码到 `main` 或 `develop` 分支即可自动触发构建：
 
@@ -178,9 +202,35 @@ python integration_test.py https://your-backend-domain.com
 
 ---
 
-## 4. 更新部署
+## 4. 更新部署（自动化）
 
-### 4.1 代码更新流程
+### 4.1 自动部署流程（推荐）
+
+**只需推送代码，其余全自动！**
+
+```bash
+# 修改代码后提交
+git add .
+git commit -m "feat: new feature"
+git push origin main
+
+# 等待 5-10 分钟，以下步骤自动完成：
+# 1. GitHub Actions 构建镜像并推送到 GHCR
+# 2. 自动触发 Coolify Webhook
+# 3. Coolify 拉取最新镜像（pull_policy: always）
+# 4. 重启所有服务
+# 5. 新版本自动上线 ✅
+```
+
+**查看部署进度**：
+- GitHub Actions: `https://github.com/<username>/<repo>/actions`
+- Coolify Logs: 在 Coolify 控制台查看实时日志
+
+### 4.2 手动部署（备选方案）
+
+如果自动部署失败，可以手动触发：
+
+#### 方法 A：在 Coolify 手动重新部署
 
 1. **推送代码**到 GitHub：
    ```bash
@@ -191,11 +241,19 @@ python integration_test.py https://your-backend-domain.com
 
 2. **等待 GitHub Actions** 自动构建新镜像（约 5-10 分钟）。
 
-3. **在 Coolify 中更新**：
-   - 方法 A：点击 **"Redeploy"** 按钮（使用最新的 `latest` 标签）
-   - 方法 B：修改 `IMAGE_TAG` 环境变量为特定版本（如 `v1.2.0`），然后点击 **"Restart"**
+3. **在 Coolify 中手动更新**：
+   - 进入 Coolify 控制台
+   - 点击项目的 **"Redeploy"** 按钮
+   - Coolify 会因为 `pull_policy: always` 自动拉取最新的 `latest` 镜像
 
-### 4.2 版本管理最佳实践
+#### 方法 B：使用 Coolify CLI
+
+```bash
+# 通过 curl 手动触发 Webhook
+curl -X POST "https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx"
+```
+
+### 4.3 版本管理最佳实践
 
 #### 使用语义化版本标签
 

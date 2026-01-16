@@ -563,7 +563,7 @@ const distributeScript = (text: string | null | undefined, count: number, assets
     }
     
     console.warn('Falling back to plain text split')
-    const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text]
+    const sentences = cleanText.match(/[^。！？.!?]+[。！？.!?]+/g) || [cleanText]
     
     if (sentences.length <= count) {
         sentences.forEach((s, i) => result.scripts[i] = s)
