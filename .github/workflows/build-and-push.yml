@@ -36,6 +36,12 @@ jobs:
           - name: frontend
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
+          - name: admin-backend
+            context: ./admin-backend
+            dockerfile: ./admin-backend/Dockerfile
+          - name: admin-frontend
+            context: ./admin-frontend
+            dockerfile: ./admin-frontend/Dockerfile
 
     steps:
       - name: Checkout repository

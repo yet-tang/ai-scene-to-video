@@ -680,13 +680,15 @@ const stopTimelinePolling = () => {
 const startScriptPolling = () => {
   stopScriptPolling()
   scriptPollTimer = setInterval(async () => {
-    // 如果状态不再是生成中，停止轮询
-    if (!isScriptGenerating.value && projectStatus.value !== 'SCRIPT_GENERATING') {
+    // 先检查当前状态是否已完成，避免不必要的请求
+    if (isScriptDoneStatus(projectStatus.value)) {
+      isScriptGenerating.value = false
       stopScriptPolling()
       return
     }
 
     await projectStore.fetchProject(projectId)
+    
     // 如果达到或超过已生成状态，更新数据并停止
     if (isScriptDoneStatus(projectStatus.value)) {
       const fullScript = projectStore.currentProject.script
