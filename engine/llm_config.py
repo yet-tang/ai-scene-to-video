@@ -47,7 +47,7 @@ AGENT_MODEL_MAPPING = {
         model="qwen3-vl-plus",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.5,  # 视觉分析需要稳定性
-        max_tokens=4000,
+        max_tokens=6000,  # 视觉分析输出可能较长（场景描述 + 结构化JSON）
     ),
     
     # 卖点提炼Agent：使用Grok（营销创意能力强）
@@ -56,7 +56,7 @@ AGENT_MODEL_MAPPING = {
         model="grok-4-1-fast-reasoning",
         api_key_env="GROK_API_KEY",
         temperature=0.8,  # 营销文案需要创意
-        max_tokens=3000,
+        max_tokens=4000,  # 营销卖点分析需要足够空间
         fallback_model="qwen3-max"
     ),
     
@@ -66,7 +66,7 @@ AGENT_MODEL_MAPPING = {
         model="doubao-seed-1-8-251228",
         api_key_env="VOLCENGINE_API_KEY",
         temperature=0.7,
-        max_tokens=4000,
+        max_tokens=8000,  # 脚本生成包含 intro_text + intro_card + segments（多片段），需要更大空间
         fallback_model="qwen3-max"
     ),
     
@@ -76,7 +76,7 @@ AGENT_MODEL_MAPPING = {
         model="qwen-plus",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.6,
-        max_tokens=3000,
+        max_tokens=4000,  # 剪辑决策输出中等长度
     ),
     
     # 音频编排Agent：使用Qwen-Plus（实用功能）
@@ -85,7 +85,7 @@ AGENT_MODEL_MAPPING = {
         model="qwen-plus",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.6,
-        max_tokens=2000,
+        max_tokens=3000,  # 音频编排输出较短
     ),
     
     # 视觉增强Agent：使用Qwen-Plus（标注决策）
@@ -94,7 +94,7 @@ AGENT_MODEL_MAPPING = {
         model="qwen-plus",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.5,
-        max_tokens=2000,
+        max_tokens=3000,  # 视觉标注输出较短
     ),
     
     # 总导演Agent：使用Qwen-Max（全局协调）
@@ -103,7 +103,7 @@ AGENT_MODEL_MAPPING = {
         model="qwen3-max",
         api_key_env="DASHSCOPE_API_KEY",
         temperature=0.7,
-        max_tokens=3000,
+        max_tokens=5000,  # 全局协调需要中等空间
     ),
 }
 

@@ -187,21 +187,35 @@ class UnifiedLLMClient:
         try:
             response = litellm.completion(**call_params)
             
-            # 成功日志
+            # 获取返回内容
+            content = response.choices[0].message.content
+            
+            # 成功日志（完整输出返回内容）
             logger.info(
                 f"LLM call success",
                 extra={
                     "event": "llm.call.success",
                     "agent": self.agent_name,
                     "model": model,
-                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                 }
             )
             
-            return response.choices[0].message.content
+            # 单独打印完整的返回内容（不截断）
+            logger.info(
+                "LLM response content",
+                extra={
+                    "event": "llm.response.content",
+                    "agent": self.agent_name,
+                    "model": model,
+                    "content": content,
+                    "content_length": len(content) if content else 0,
+                }
+            )
+            
+            return content
         
         except Exception as e:
             logger.error(
@@ -279,19 +293,33 @@ class UnifiedLLMClient:
         try:
             response = litellm.completion(**call_params)
             
+            # 获取返回内容
+            content = response.choices[0].message.content
+            
             logger.info(
                 f"Multimodal call success",
                 extra={
                     "event": "llm.multimodal.success",
                     "agent": self.agent_name,
                     "model": model,
-                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                 }
             )
             
-            return response.choices[0].message.content
+            # 单独打印完整的返回内容
+            logger.info(
+                "Multimodal response content",
+                extra={
+                    "event": "llm.multimodal.content",
+                    "agent": self.agent_name,
+                    "model": model,
+                    "content": content,
+                    "content_length": len(content) if content else 0,
+                }
+            )
+            
+            return content
         
         except Exception as e:
             logger.error(
@@ -406,19 +434,33 @@ class UnifiedLLMClient:
         try:
             response = litellm.completion(**fallback_params)
             
+            # 获取返回内容
+            content = response.choices[0].message.content
+            
             logger.info(
                 f"Fallback call success",
                 extra={
                     "event": "llm.fallback.success",
                     "agent": self.agent_name,
                     "model": fallback_model,
-                    "content": response.choices[0].message.content,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                 }
             )
             
-            return response.choices[0].message.content
+            # 单独打印完整的返回内容
+            logger.info(
+                "Fallback response content",
+                extra={
+                    "event": "llm.fallback.content",
+                    "agent": self.agent_name,
+                    "model": fallback_model,
+                    "content": content,
+                    "content_length": len(content) if content else 0,
+                }
+            )
+            
+            return content
         
         except Exception as e:
             logger.error(
