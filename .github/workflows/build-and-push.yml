@@ -141,17 +141,17 @@ jobs:
           echo "触发 Coolify 重新部署..."
           
           # 检查必需的 Secrets 是否已配置
-          if [ -z "${{ secrets.COOLIFY_WEBHOOK }}" ]; then
-            echo "⚠️  COOLIFY_WEBHOOK 未配置，跳过自动部署"
-            echo "请在 GitHub Secrets 中添加 COOLIFY_WEBHOOK"
+          if [ -z "${{ secrets.COOLIFY_WEBHOOK_URL }}" ]; then
+            echo "⚠️  COOLIFY_WEBHOOK_URL 未配置，跳过自动部署"
+            echo "请在 GitHub Secrets 中添加 COOLIFY_WEBHOOK_URL"
             echo "或者在 Coolify 控制台手动点击 Redeploy"
             exit 0
           fi
           
-          if [ -z "${{ secrets.COOLIFY_TOKEN }}" ]; then
-            echo "⚠️  COOLIFY_TOKEN 未配置，跳过自动部署"
+          if [ -z "${{ secrets.COOLIFY_API_TOKEN_GITHUB }}" ]; then
+            echo "⚠️  COOLIFY_API_TOKEN_GITHUB 未配置，跳过自动部署"
             echo "请在 Coolify 控制台生成 API Token"
-            echo "然后在 GitHub Secrets 中添加 COOLIFY_TOKEN"
+            echo "然后在 GitHub Secrets 中添加 COOLIFY_API_TOKEN_GITHUB"
             exit 0
           fi
           
@@ -160,8 +160,8 @@ jobs:
           echo "Webhook URL: ${{ secrets.COOLIFY_WEBHOOK }}"
           
           response=$(curl -s -w "\n%{http_code}" \
-            --request GET '${{ secrets.COOLIFY_WEBHOOK }}' \
-            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}' \
+            --request GET '${{ secrets.COOLIFY_WEBHOOK_URL }}' \
+            --header 'Authorization: Bearer ${{ secrets.COOLIFY_API_TOKEN_GITHUB }}' \
             || echo "\ncurl_failed")
           
           # 检查 curl 是否执行成功
@@ -192,8 +192,8 @@ jobs:
             echo "  - 500: Coolify 内部错误"
             echo ""
             echo "排查步骤："
-            echo "  1. 验证 COOLIFY_WEBHOOK: 在 Coolify 控制台 -> 项目 -> Webhooks 页面获取"
-            echo "  2. 验证 COOLIFY_TOKEN: 在 Coolify 控制台 -> Keys & Tokens -> API Tokens 生成"
+            echo "  1. 验证 COOLIFY_WEBHOOK_URL: 在 Coolify 控制台 -> 项目 -> Webhooks 页面获取"
+            echo "  2. 验证 COOLIFY_API_TOKEN_GITHUB: 在 Coolify 控制台 -> Keys & Tokens -> API Tokens 生成"
             echo "  3. 确认 Token 具有 'Deploy' 权限"
             exit 1
           fi
