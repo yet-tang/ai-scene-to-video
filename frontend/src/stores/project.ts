@@ -70,7 +70,19 @@ export const useProjectStore = defineStore('project', () => {
       currentProject.value.id = data.id
       currentProject.value.title = data.title
       currentProject.value.status = data.status
-      currentProject.value.script = data.scriptContent
+      
+      // 修复：确保 scriptContent 始终是 JSON 字符串
+      if (data.scriptContent) {
+        if (typeof data.scriptContent === 'string') {
+          currentProject.value.script = data.scriptContent
+        } else {
+          // 如果是对象，将其序列化为 JSON 字符串
+          currentProject.value.script = JSON.stringify(data.scriptContent)
+        }
+      } else {
+        currentProject.value.script = ''
+      }
+      
       currentProject.value.audioUrl = data.audioUrl
       currentProject.value.finalVideoUrl = data.finalVideoUrl
       currentProject.value.errorLog = data.errorLog || ''
@@ -134,9 +146,16 @@ export const useProjectStore = defineStore('project', () => {
             sceneScore: a.sceneScore
         }
       })
+      
+      // 修复：确保 scriptContent 始终是 JSON 字符串
       if (data.scriptContent) {
-        currentProject.value.script = data.scriptContent
+        if (typeof data.scriptContent === 'string') {
+          currentProject.value.script = data.scriptContent
+        } else {
+          currentProject.value.script = JSON.stringify(data.scriptContent)
+        }
       }
+      
       if (data.status) {
         currentProject.value.status = data.status
       }
@@ -164,7 +183,21 @@ export const useProjectStore = defineStore('project', () => {
     currentProject.value.errorRequestId = ''
     currentProject.value.errorStep = ''
     currentProject.value.errorAt = ''
-    currentProject.value.script = '欢迎来到阳光花园，小区环境优美，配套成熟。客厅通透明亮，卧室安静舒适。'
+    
+    // 修复：使用正确的 JSON 格式
+    currentProject.value.script = JSON.stringify({
+      intro_text: '欢迎来到阳光花园，小区环境优美，配套成熟。',
+      intro_card: {
+        headline: '阳光花园 · 2室1厅',
+        specs: '89㎡ | 2室1厅 | 精装修',
+        highlights: ['南北通透', '地铁沿线', '学区房']
+      },
+      segments: [
+        { asset_id: 'mock-asset-1', text: '客厅通透明亮，采光极佳。' },
+        { asset_id: 'mock-asset-2', text: '卧室安静舒适，适合休息。' }
+      ]
+    })
+    
     currentProject.value.info = {
       communityName: '阳光花园',
       layout: { room: 2, hall: 1, restroom: 1 },

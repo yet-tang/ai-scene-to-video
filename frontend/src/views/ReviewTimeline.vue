@@ -359,6 +359,7 @@ const loadData = async () => {
     
     const storeAssets = projectStore.currentProject.assets
     const globalScript = projectStore.currentProject.script || ''
+    const currentStatus = projectStore.currentProject.status
     
     const distributed = distributeScript(globalScript, storeAssets.length, storeAssets)
     introText.value = distributed.intro
@@ -368,7 +369,11 @@ const loadData = async () => {
         ...a,
         script: distributed.scripts[i] || ''
     }))
-    analysisDone.value = assets.value.length > 0 && isSplitDoneStatus(projectStore.currentProject.status)
+    
+    // 修复：确保在已完成状态下正确设置 analysisDone
+    analysisDone.value = assets.value.length > 0 && isSplitDoneStatus(currentStatus)
+    
+    console.log('[loadData] Status:', currentStatus, 'analysisDone:', analysisDone.value, 'assets:', assets.value.length)
 
   } catch (e) {
     showToast('加载失败')
@@ -702,7 +707,13 @@ const startScriptPolling = () => {
     // 如果达到或超过已生成状态，更新数据并停止
     if (isScriptDoneStatus(latestStatus)) {
       const fullScript = projectStore.currentProject.script
-      console.log('[ScriptPoll] Full script (first 200 chars):', fullScript?.slice(0, 200))
+      
+      // 安全打印脚本内容
+      if (fullScript && typeof fullScript === 'string') {
+        console.log('[ScriptPoll] Full script (first 200 chars):', fullScript.slice(0, 200))
+      } else {
+        console.warn('[ScriptPoll] Script is empty or invalid:', typeof fullScript)
+      }
       
       const distributed = distributeScript(fullScript, assets.value.length, assets.value)
       console.log('[ScriptPoll] Distributed:', {
@@ -716,6 +727,11 @@ const startScriptPolling = () => {
       assets.value.forEach((a, i) => {
         if (distributed.scripts[i]) a.script = distributed.scripts[i]
       })
+
+      // 修复：确保 analysisDone 被设置为 true，以显示时间线内容
+      if (!analysisDone.value && assets.value.length > 0) {
+        analysisDone.value = true
+      }
 
       isScriptGenerating.value = false
       stopScriptPolling()
