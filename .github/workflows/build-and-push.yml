@@ -136,30 +136,64 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-      - name: Trigger Coolify Deployment
+      - name: Deploy to Coolify
         run: |
           echo "触发 Coolify 重新部署..."
           
-          # 调用 Coolify Webhook
-          response=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}")
+          # 检查必需的 Secrets 是否已配置
+          if [ -z "${{ secrets.COOLIFY_WEBHOOK }}" ]; then
+            echo "⚠️  COOLIFY_WEBHOOK 未配置，跳过自动部署"
+            echo "请在 GitHub Secrets 中添加 COOLIFY_WEBHOOK"
+            echo "或者在 Coolify 控制台手动点击 Redeploy"
+            exit 0
+          fi
+          
+          if [ -z "${{ secrets.COOLIFY_TOKEN }}" ]; then
+            echo "⚠️  COOLIFY_TOKEN 未配置，跳过自动部署"
+            echo "请在 Coolify 控制台生成 API Token"
+            echo "然后在 GitHub Secrets 中添加 COOLIFY_TOKEN"
+            exit 0
+          fi
+          
+          # 按照 Coolify 官方文档调用 API
+          # 参考: https://coolify.io/docs/applications/ci-cd/github/actions
+          echo "Webhook URL: ${{ secrets.COOLIFY_WEBHOOK }}"
+          
+          response=$(curl -s -w "\n%{http_code}" \
+            --request GET '${{ secrets.COOLIFY_WEBHOOK }}' \
+            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}' \
+            || echo "\ncurl_failed")
+          
+          # 检查 curl 是否执行成功
+          if echo "$response" | grep -q "curl_failed"; then
+            echo "❌ curl 命令执行失败"
+            echo "可能原因："
+            echo "  1. Webhook URL 格式错误"
+            echo "  2. 网络连接问题"
+            echo "  3. Coolify 服务不可达"
+            exit 1
+          fi
+          
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | head -n-1)
           
           echo "HTTP Status: $http_code"
-          echo "Response: $body"
+          echo "Response Body: $body"
           
           # 检查响应状态码
           if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
             echo "✅ Coolify 部署已触发成功"
+            echo "预计 2-5 分钟后生效"
           else
             echo "❌ Coolify 部署触发失败 (HTTP $http_code)"
+            echo "常见错误码："
+            echo "  - 404: Webhook URL 不存在或已过期"
+            echo "  - 401/403: API Token 错误或权限不足"
+            echo "  - 500: Coolify 内部错误"
+            echo ""
+            echo "排查步骤："
+            echo "  1. 验证 COOLIFY_WEBHOOK: 在 Coolify 控制台 -> 项目 -> Webhooks 页面获取"
+            echo "  2. 验证 COOLIFY_TOKEN: 在 Coolify 控制台 -> Keys & Tokens -> API Tokens 生成"
+            echo "  3. 确认 Token 具有 'Deploy' 权限"
             exit 1
           fi
-      
-      - name: Deployment notification
-        run: |
-          echo "=== 部署状态 ==="
-          echo "所有服务镜像已推送到 GHCR"
-          echo "Coolify 将自动拉取最新的 latest 镜像并重新部署"
-          echo "预计 2-5 分钟后生效"
-          echo "=================="

@@ -51,21 +51,84 @@
 VITE_API_BASE_URL=https://your-api-domain.com
 VITE_API_KEY=your_frontend_api_key
 
-# Coolify Webhook（自动触发部署，必填）
-COOLIFY_WEBHOOK_URL=https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
+# Coolify 部署配置（必填）
+COOLIFY_WEBHOOK=https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
+COOLIFY_TOKEN=your-coolify-api-token
 ```
 
-**如何获取 Coolify Webhook URL**：
+**如何获取 Coolify 配置**：
+
+##### 获取 COOLIFY_WEBHOOK
 1. 登录 Coolify 控制台
-2. 进入你的项目 → **Webhooks** 页面
-3. 复制 **Deploy Webhook URL**
-4. 将 URL 粘贴到 GitHub Secrets 中
+2. 进入你的项目
+3. 点击 **Webhooks** 页面
+4. 复制 **Deploy Webhook URL**
+5. 将 URL 粘贴到 GitHub Secrets 中
+
+##### 获取 COOLIFY_TOKEN
+1. 在 Coolify 控制台，进入 **Settings**
+2. 点击 **Configuration** → **Advanced**
+3. 启用 **API Access** 选项
+4. 进入 **Keys & Tokens** 页面
+5. 点击 **API Tokens** 选项卡
+6. 勾选 **Deploy** 权限
+7. 输入 Token 名称，点击 **Create**
+8. 复制生成的 API Token
+9. 将 Token 粘贴到 GitHub Secrets 中
+
+**重要提示**：
+- API Token 只会显示一次，请妥善保存
+- Token 必须具有 **Deploy** 权限
+- 参考官方文档：[Coolify GitHub Actions Integration](https://coolify.io/docs/applications/ci-cd/github/actions)
 
 **注意**: `GITHUB_TOKEN` 无需手动配置，GitHub Actions 会自动注入。
 
-#### 步骤 3：配置自动部署
+#### 步骤 3：配置自动部署（两种方案）
 
-本项目已配置 **GitHub Actions 自动触发 Coolify 部署**，无需手动操作。
+**方案 A：GitHub Repository Webhooks（推荐）**✨
+
+直接使用 GitHub 自带的 Webhooks 功能，无需 GitHub Actions 介入！
+
+1. **在 GitHub 仓库中配置 Webhook**：
+   - 进入 **Settings → Webhooks** （左侧菜单）
+   - 点击 **Add webhook**
+   - 填写配置：
+     ```
+     Payload URL: https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
+     Content type: application/json
+     Secret: (留空或与 Coolify 配置一致)
+     Which events: Just the push event
+     Active: ✔️
+     ```
+   - 点击 **Add webhook**
+
+2. **工作原理**：
+   ```
+   代码推送到 main 分支
+       ↓
+   GitHub 立即发送 Webhook 事件到 Coolify
+       ↓
+   Coolify 自动拉取最新镜像并重启
+       ↓
+   ✅ 无需等待 GitHub Actions 完成！
+   ```
+
+3. **验证 Webhook**：
+   - 推送一次代码
+   - 在 GitHub → Settings → Webhooks → Recent Deliveries 查看请求状态
+   - 应该显示 **200 OK**
+
+**优点**：
+- ✅ **更快**：Coolify 立即收到通知，无需等待 Actions 完成
+- ✅ **更简单**：无需在 GitHub Actions 中写额外代码
+- ✅ **更可靠**：GitHub Webhooks 有自动重试机制
+- ✅ **独立性**：即使 GitHub Actions 失败，部署仍然可以触发
+
+---
+
+**方案 B：GitHub Actions 手动调用（当前实现）**
+
+本项目已配置 **GitHub Actions 自动触发 Coolify 部署**。
 
 **工作流程**：
 1. 推送代码到 `main` 分支
@@ -310,7 +373,169 @@ IMAGE_TAG=latest
    - Username: 你的 GitHub 用户名
    - Password: GitHub Personal Access Token (PAT)
 
-### 5.2 GitHub Actions 构建失败
+### 5.3 GitHub Actions 构建失败
+
+**症状**：Workflow 运行失败
+
+**排查步骤**：
+
+1. **检查 Secrets 配置**：
+   - 进入 **Settings → Secrets and variables → Actions**
+   - 确保 `VITE_API_BASE_URL` 和 `VITE_API_KEY` 已配置
+
+2. **查看构建日志**：
+   - 进入 **Actions** 选项卡
+   - 点击失败的 Workflow 运行
+   - 查看详细错误信息
+
+3. **常见错误**：
+   - **"denied: permission_denied"**: GHCR 权限不足，检查 `GITHUB_TOKEN` 权限
+   - **"failed to solve: Dockerfile not found"**: 检查 Dockerfile 路径
+   - **"Maven build failed"**: 检查 Java 代码编译错误
+
+### 5.4 Coolify 自动部署失败
+
+**症状**：`trigger-coolify-deploy` 步骤报错 `exit code 3`
+
+**原因分析**：
+
+#### 错误 1：COOLIFY_WEBHOOK 未配置
+
+```bash
+⚠️  COOLIFY_WEBHOOK 未配置，跳过自动部署
+```
+
+**解决方案**：
+1. 在 Coolify 控制台获取 Webhook URL：
+   - 进入项目 → **Webhooks** 页面
+   - 复制 **Deploy Webhook URL**
+
+2. 在 GitHub 添加 Secret：
+   - 进入 **Settings → Secrets and variables → Actions**
+   - 点击 **New repository secret**
+   - Name: `COOLIFY_WEBHOOK`
+   - Value: 粘贴 Webhook URL
+
+3. 重新触发 GitHub Actions
+
+#### 错误 2：COOLIFY_TOKEN 未配置
+
+```bash
+⚠️  COOLIFY_TOKEN 未配置，跳过自动部署
+```
+
+**解决方案**：
+
+1. **启用 Coolify API 访问**：
+   - 在 Coolify 控制台 → **Settings** → **Configuration** → **Advanced**
+   - 勾选 **API Access** 选项
+
+2. **生成 API Token**：
+   - 进入 **Keys & Tokens** 页面
+   - 点击 **API Tokens** 选项卡
+   - 勾选 **Deploy** 权限
+   - 输入 Token 名称（如 `GitHub Actions Deploy`）
+   - 点击 **Create**
+   - **立即复制**生成的 Token（只会显示一次！）
+
+3. **在 GitHub 添加 Secret**：
+   - 进入 **Settings → Secrets and variables → Actions**
+   - 点击 **New repository secret**
+   - Name: `COOLIFY_TOKEN`
+   - Value: 粘贴 API Token
+
+4. 重新触发 GitHub Actions
+
+#### 错误 2：curl 命令执行失败
+
+```bash
+❌ curl 命令执行失败
+可能原因：
+  1. Webhook URL 格式错误
+  2. 网络连接问题
+  3. Coolify 服务不可达
+```
+
+**解决方案**：
+
+1. **验证 Webhook URL 格式**：
+   ```bash
+   # 正确格式
+   https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
+   
+   # 错误格式（缺少 https://）
+   your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx
+   ```
+
+2. **本地测试 Webhook**：
+   ```bash
+   curl -v -X POST "https://your-coolify.com/api/v1/deploy/webhooks/xxxxxxxx"
+   
+   # 应该返回 200-299 状态码
+   ```
+
+3. **检查 Coolify 服务状态**：
+   - 访问 Coolify 控制台首页
+   - 确认服务正常运行
+
+#### 错误 3：HTTP 404 / 401 / 403
+
+```bash
+❌ Coolify 部署触发失败 (HTTP 404)
+常见错误码：
+  - 404: Webhook URL 不存在或已过期
+  - 401/403: 鉴权失败
+  - 500: Coolify 内部错误
+```
+
+**解决方案**：
+
+- **404 Not Found**：
+  - Webhook URL 已过期或被删除
+  - 在 Coolify 中重新生成 Webhook
+  - 更新 GitHub Secret
+
+- **401 Unauthorized / 403 Forbidden**：
+  - Webhook URL 中的 Token 错误
+  - 检查是否复制了完整的 URL（包括 Token）
+
+- **500 Internal Server Error**：
+  - Coolify 服务内部错误
+  - 查看 Coolify 服务器日志
+  - 稍后重试
+
+#### 错误 4：网络超时
+
+```bash
+curl: (28) Connection timed out after 10000 milliseconds
+```
+
+**解决方案**：
+1. 检查 Coolify 服务器防火墙规则
+2. 确认 Webhook 端点可从 GitHub Actions 访问
+3. 考虑增加 curl 超时时间：
+   ```yaml
+   response=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}")
+   ```
+
+---
+
+### 5.5 手动触发部署（备选方案）
+
+如果自动部署持续失败，可以更新工作流，在失败时不阻塞：
+
+```yaml
+trigger-coolify-deploy:
+  runs-on: ubuntu-latest
+  needs: build-and-push
+  continue-on-error: true  # 即使失败也不影响整体 CI
+```
+
+然后在 Coolify 控制台手动点击 **"Redeploy"** 按钮。
+
+---
+
+### 5.6 调试技巧
 
 **症状**：Workflow 运行失败
 
